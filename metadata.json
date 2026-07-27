@@ -1,0 +1,11 @@
+{
+  "name": "PustakaKiosk - Smart Library System",
+  "description": "Sistem peminjaman buku perpustakaan mandiri berbasis Raspberry Pi 4B dengan integrasi RFID dan QR Code.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "inventory_management",
+    "kiosk_ui"
+  ]
+}
