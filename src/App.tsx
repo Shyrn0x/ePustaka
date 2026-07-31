@@ -19,12 +19,18 @@ import {
   CheckCircle2,
   XCircle,
   Book,
-  Download
+  Download,
+  Clock,
+  ChevronLeft,
+  AlertCircle,
+  CheckCircle,
+  CreditCard,
+  BookMarked
 } from 'lucide-react';
 import { cn } from './lib/utils';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
-type ViewState = 'HOME' | 'PINJAM' | 'KEMBALI' | 'KATALOG' | 'STAFF_LOGIN' | 'DASHBOARD';
+type ViewState = 'LOGIN' | 'HOME' | 'PINJAM' | 'KEMBALI' | 'KATALOG' | 'DASHBOARD' | 'PROFIL';
 
 
 const useSortableData = (items: any[], config: { key: string, direction: 'asc' | 'desc' } | null = null) => {
@@ -58,14 +64,57 @@ const useSortableData = (items: any[], config: { key: string, direction: 'asc' |
 };
 
 export default function App() {
-  const [view, setView] = useState<ViewState>('HOME');
+  const [user, setUser] = useState<any>(null);
+  const [view, setView] = useState<ViewState>('LOGIN');
   const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'error'>('checking');
   const [remoteUrl, setRemoteUrl] = useState("");
 
   const handleLoginSuccess = (data: any) => {
+    if (data.token) {
+      localStorage.setItem('token', data.token);
+    }
     if (data.remoteUrl) setRemoteUrl(data.remoteUrl);
-    setView('DASHBOARD');
+    setUser(data.user);
+    if (data.user?.role === 'ADMIN') {
+      setView('DASHBOARD');
+    } else {
+      setView('HOME');
+    }
   };
+  
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    setUser(null);
+    setView('LOGIN');
+  };
+
+  useEffect(() => {
+    let timeoutId: any;
+    const resetTimeout = () => {
+      clearTimeout(timeoutId);
+      if (user && user.role === 'ADMIN') {
+        timeoutId = setTimeout(() => {
+          handleLogout();
+        }, 10 * 60 * 1000); // 10 minutes
+      }
+    };
+
+    if (user && user.role === 'ADMIN') {
+      resetTimeout();
+      window.addEventListener('mousemove', resetTimeout);
+      window.addEventListener('keydown', resetTimeout);
+      window.addEventListener('click', resetTimeout);
+      window.addEventListener('touchstart', resetTimeout);
+    }
+
+    return () => {
+      clearTimeout(timeoutId);
+      window.removeEventListener('mousemove', resetTimeout);
+      window.removeEventListener('keydown', resetTimeout);
+      window.removeEventListener('click', resetTimeout);
+      window.removeEventListener('touchstart', resetTimeout);
+    };
+  }, [user]);
 
   useEffect(() => {
     const checkDb = async () => {
@@ -81,19 +130,26 @@ export default function App() {
   }, []);
 
   const renderView = () => {
+    if (!user && view === 'KATALOG') {
+      return <KatalogView onBack={() => setView('LOGIN')} />;
+    }
+    if (!user) {
+      return <LoginView onLogin={handleLoginSuccess} onKatalog={() => setView('KATALOG')} />;
+    }
+
     switch (view) {
       case 'HOME':
         return <HomeView onNavigate={setView} />;
       case 'PINJAM':
-        return <ActionView title="Peminjaman Mandiri" onBack={() => setView('HOME')} type="PINJAM" />;
+        return <ActionView title="Peminjaman Mandiri" onBack={() => setView('HOME')} type="PINJAM" user={user} />;
       case 'KEMBALI':
-        return <ActionView title="Pengembalian Mandiri" onBack={() => setView('HOME')} type="KEMBALI" />;
+        return <ActionView title="Pengembalian Mandiri" onBack={() => setView('HOME')} type="KEMBALI" user={user} />;
       case 'KATALOG':
         return <KatalogView onBack={() => setView('HOME')} />;
-      case 'STAFF_LOGIN':
-        return <StaffLoginView onBack={() => setView('HOME')} onLogin={handleLoginSuccess} />;
+      case 'PROFIL':
+        return <UserProfileView user={user} onBack={() => setView('HOME')} />;
       case 'DASHBOARD':
-        return <StaffDashboard onLogout={() => setView('HOME')} remoteUrl={remoteUrl} />;
+        return <StaffDashboard onLogout={handleLogout} remoteUrl={remoteUrl} />;
       default:
         return <HomeView onNavigate={setView} />;
     }
@@ -107,7 +163,7 @@ export default function App() {
           <div 
             className={`flex items-center gap-3 group ${view !== 'DASHBOARD' ? 'cursor-pointer' : ''}`}
             onClick={() => {
-              if (view !== 'DASHBOARD') setView('HOME');
+              if (user) { if (user.role === 'ADMIN') setView('DASHBOARD'); else setView('HOME'); } else setView('LOGIN');
             }}
           >
             <div className="bg-[#6366f1] p-2.5 rounded-2xl text-white shadow-lg shadow-indigo-200 group-hover:scale-110 transition-transform">
@@ -128,16 +184,14 @@ export default function App() {
               {dbStatus === 'connected' ? "System Online" : "Local Database Only"}
             </div>
             
-            <button 
-              onClick={() => {
-                if (view !== 'DASHBOARD') setView('STAFF_LOGIN');
-              }}
-              disabled={view === 'DASHBOARD'}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl transition-all text-sm font-bold border ${view === 'DASHBOARD' ? 'bg-indigo-50 border-indigo-100 text-indigo-600 cursor-default opacity-80' : 'bg-gray-50 hover:bg-gray-100 text-gray-600 border-gray-100'}`}
-            >
-              <User size={18} />
-              {view === 'DASHBOARD' ? 'Admin' : 'Admin'}
-            </button>
+            {user && (
+              <button 
+                onClick={handleLogout}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-2xl transition-all text-sm font-bold border bg-gray-50 hover:bg-red-50 text-gray-600 hover:text-red-600 border-gray-100 hover:border-red-100"
+              >
+                Logout
+              </button>
+            )}
           </div>
         </header>
 
@@ -150,7 +204,7 @@ export default function App() {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 1.02 }}
               transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-              className="h-full w-full p-8 flex flex-col"
+              className="min-h-full w-full p-8 flex flex-col"
             >
               {renderView()}
             </motion.div>
@@ -202,9 +256,9 @@ function HomeView({ onNavigate }: { onNavigate: (v: ViewState) => void }) {
           delay={0.2}
         />
         <HomeCard 
-          icon={<List size={40} />} 
-          title="Katalog Buku" 
-          onClick={() => onNavigate('KATALOG')} 
+          icon={<User size={40} />} 
+          title="Profil & Riwayat" 
+          onClick={() => onNavigate('PROFIL')} 
           delay={0.3}
         />
       </div>
@@ -231,9 +285,9 @@ function HomeCard({ icon, title, onClick, delay }: { icon: React.ReactNode, titl
   );
 }
 
-function ActionView({ title, onBack, type }: { title: string, onBack: () => void, type: 'PINJAM' | 'KEMBALI' }) {
-  const [step, setStep] = useState(1);
-  const [member, setMember] = useState<any>(null);
+function ActionView({ title, onBack, type, user }: { title: string, onBack: () => void, type: 'PINJAM' | 'KEMBALI', user?: any }) {
+  const [step, setStep] = useState(user ? 2 : 1);
+  const [member, setMember] = useState<any>(user || null);
   const [book, setBook] = useState<any>(null);
   const [scannedBooks, setScannedBooks] = useState<any[]>([]);
   const [scannedInput, setScannedInput] = useState("");
@@ -567,7 +621,10 @@ function ActionView({ title, onBack, type }: { title: string, onBack: () => void
               </div>
             ) : (
               <div className="w-full mt-4 flex flex-col gap-2">
-                <button onClick={() => { setStatus('idle'); setMessage(''); setScannedBooks([]); scannedCodesRef.current.clear(); setActiveLoans([]); setActiveLoansFetched(false); setMember(null); setStep(1); }} className="w-full py-3 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors">
+                <button onClick={() => { 
+                  if (user) { onBack(); } 
+                  else { setStatus('idle'); setMessage(''); setScannedBooks([]); scannedCodesRef.current.clear(); setActiveLoans([]); setActiveLoansFetched(false); setMember(null); setStep(1); } 
+                }} className="w-full py-3 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors">
                   Kembali ke Awal
                 </button>
                 <button onClick={() => { onBack(); setMessage(''); setScannedBooks([]); scannedCodesRef.current.clear(); setActiveLoans([]); setActiveLoansFetched(false); setMember(null); }} className="w-full py-3 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 transition-colors shadow-lg shadow-green-200">
@@ -811,7 +868,7 @@ function KatalogView({ onBack }: { onBack: () => void }) {
   );
 }
 
-function StaffLoginView({ onBack, onLogin }: { onBack: () => void, onLogin: (data: any) => void }) {
+function LoginView({ onLogin, onKatalog }: { onLogin: (data: any) => void, onKatalog: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -840,14 +897,14 @@ function StaffLoginView({ onBack, onLogin }: { onBack: () => void, onLogin: (dat
   };
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center">
+    <div className="flex-1 flex flex-col items-center justify-center py-8 my-auto">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <div className="inline-flex p-4 bg-[#8b5cf6]/10 rounded-3xl text-[#8b5cf6] mb-4">
             <User size={48} />
           </div>
-          <h2 className="text-3xl font-bold text-gray-800">Admin Portal</h2>
-          <p className="text-gray-500">Masukkan kredensial Anda untuk masuk ke sistem</p>
+          <h2 className="text-3xl font-bold text-gray-800">Login ePustaka</h2>
+          <p className="text-gray-500">Gunakan Username / Scan RFID dan Password</p>
         </div>
 
         {error && (
@@ -859,13 +916,15 @@ function StaffLoginView({ onBack, onLogin }: { onBack: () => void, onLogin: (dat
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Username</label>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Username / Scan RFID</label>
             <input 
               type="text" 
               placeholder="admin"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
               className="w-full px-4 py-3 bg-gray-100 border-none rounded-xl focus:ring-2 focus:ring-[#8b5cf6] outline-none"
+              autoFocus
             />
           </div>
           <div>
@@ -884,14 +943,18 @@ function StaffLoginView({ onBack, onLogin }: { onBack: () => void, onLogin: (dat
             disabled={loading}
             className="w-full py-4 bg-[#6366f1] text-white rounded-xl font-bold shadow-lg hover:bg-[#5558e6] transition-all transform active:scale-95 mt-4 disabled:opacity-50"
           >
-            {loading ? "Logging in..." : "Login"}
+            {loading ? "Logging in..." : "Masuk"}
           </button>
-          <button 
-            onClick={onBack}
-            className="w-full py-3 bg-gray-100 text-gray-600 font-bold rounded-xl hover:bg-gray-200 transition-colors mt-2"
-          >
-            Kembali ke Kiosk
-          </button>
+          <div className="mt-6 text-center">
+             <p className="text-sm text-gray-500 mb-3 font-medium">Bisa juga masuk sebagai tamu untuk</p>
+             <button 
+               onClick={onKatalog}
+               className="w-full py-3.5 bg-white border-2 border-indigo-100 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200 rounded-xl font-bold shadow-sm transition-all active:scale-[0.98]"
+             >
+               Lihat Katalog Buku
+             </button>
+          </div>
+
         </div>
       </div>
     </div>
@@ -1993,6 +2056,150 @@ function VisitorStats() {
             )}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+function UserProfileView({ user, onBack }: { user: any, onBack: () => void }) {
+  const [history, setHistory] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filterStatus, setFilterStatus] = useState<string>('SEMUA');
+
+  useEffect(() => {
+    fetch(`/api/users/${user.id}/history`)
+      .then(res => res.json())
+      .then(data => {
+        setHistory(data);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error(err);
+        setLoading(false);
+      });
+  }, [user.id]);
+
+  const totalPinjam = history.length;
+  const sedangDipinjam = history.filter(tx => tx.status === 'BERJALAN' || tx.status === 'TERLAMBAT').length;
+  const totalDenda = history.reduce((sum, tx) => sum + (tx.fine_amount || 0), 0);
+
+  return (
+    <div className="flex flex-col h-full bg-gray-50 rounded-3xl p-4 md:p-8 overflow-y-auto">
+      <div className="flex items-center justify-between mb-6">
+         <div>
+            <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-[#6366f1] transition-colors font-bold mb-4"><ChevronLeft /> Kembali</button>
+            <h2 className="text-3xl font-black text-gray-800 tracking-tight">Profil & Riwayat</h2>
+         </div>
+      </div>
+      
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
+         <div className="flex items-center gap-6">
+           <div className="w-16 h-16 bg-[#8b5cf6]/10 text-[#8b5cf6] rounded-full flex items-center justify-center shrink-0">
+              <User size={32} />
+           </div>
+           <div>
+              <h3 className="text-xl font-bold text-gray-800">{user.name}</h3>
+              <p className="text-gray-500 font-medium">NISN: {user.student_id} • Status: {user.role}</p>
+           </div>
+         </div>
+         <div className="flex flex-wrap gap-4">
+           <div className="bg-blue-50 px-4 py-3 rounded-xl border border-blue-100 min-w-[120px]">
+             <div className="text-blue-500 flex items-center gap-2 mb-1"><BookMarked size={16}/> <span className="text-xs font-bold uppercase tracking-wider">Total Pinjam</span></div>
+             <div className="text-2xl font-black text-blue-900">{totalPinjam} <span className="text-sm font-medium text-blue-600">Buku</span></div>
+           </div>
+           <div className="bg-orange-50 px-4 py-3 rounded-xl border border-orange-100 min-w-[120px]">
+             <div className="text-orange-500 flex items-center gap-2 mb-1"><Clock size={16}/> <span className="text-xs font-bold uppercase tracking-wider">Sedang Dipinjam</span></div>
+             <div className="text-2xl font-black text-orange-900">{sedangDipinjam} <span className="text-sm font-medium text-orange-600">Buku</span></div>
+           </div>
+           <div className="bg-red-50 px-4 py-3 rounded-xl border border-red-100 min-w-[120px]">
+             <div className="text-red-500 flex items-center gap-2 mb-1"><AlertCircle size={16}/> <span className="text-xs font-bold uppercase tracking-wider">Total Denda</span></div>
+             <div className="text-2xl font-black text-red-900"><span className="text-sm font-bold">Rp</span> {totalDenda.toLocaleString('id-ID')}</div>
+           </div>
+         </div>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex-1 min-h-[400px] flex flex-col">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+          <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><List size={20} /> Riwayat Transaksi</h3>
+          <div className="flex bg-gray-100 p-1 rounded-lg">
+            {['SEMUA', 'BERJALAN', 'TERLAMBAT', 'SELESAI'].map(status => (
+              <button
+                key={status}
+                onClick={() => setFilterStatus(status)}
+                className={cn(
+                  "px-4 py-1.5 rounded-md text-sm font-bold transition-colors capitalize",
+                  filterStatus === status ? "bg-white text-[#8b5cf6] shadow-sm" : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                {status.toLowerCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+        {loading ? (
+          <div className="text-center py-10 text-gray-500 font-medium flex items-center justify-center gap-3">
+             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-[#8b5cf6]"></div>
+             Memuat data...
+          </div>
+        ) : history.length === 0 ? (
+          <div className="text-center py-12 text-gray-500 flex flex-col items-center gap-4">
+             <div className="bg-gray-50 w-16 h-16 rounded-full flex items-center justify-center text-gray-400">
+               <Book size={24} />
+             </div>
+             <div className="font-medium">Belum ada riwayat transaksi.</div>
+          </div>
+        ) : (() => {
+          const filteredHistory = history.filter(tx => filterStatus === 'SEMUA' || tx.status === filterStatus);
+          if (filteredHistory.length === 0) {
+            return (
+              <div className="text-center py-12 text-gray-500 flex flex-col items-center gap-4">
+                 <div className="bg-gray-50 w-16 h-16 rounded-full flex items-center justify-center text-gray-400">
+                   <List size={24} />
+                 </div>
+                 <div className="font-medium">Tidak ada transaksi untuk status {filterStatus.toLowerCase()}.</div>
+              </div>
+            );
+          }
+          return (
+            <div className="space-y-4">
+              {filteredHistory.map((tx, idx) => (
+              <div key={idx} className="flex flex-col md:flex-row md:items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100 gap-4 hover:border-[#8b5cf6]/30 transition-colors">
+                <div className="flex items-start gap-4">
+                   <div className={cn(
+                     "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
+                     tx.status === 'SELESAI' ? "bg-green-100 text-green-600" :
+                     tx.status === 'TERLAMBAT' ? "bg-red-100 text-red-600" :
+                     "bg-orange-100 text-orange-600"
+                   )}>
+                     {tx.status === 'SELESAI' ? <CheckCircle size={20} /> : tx.status === 'TERLAMBAT' ? <AlertCircle size={20} /> : <Clock size={20} />}
+                   </div>
+                   <div>
+                     <h4 className="font-bold text-gray-800 leading-tight mb-1">{tx.book_title || "Buku"}</h4>
+                     <p className="text-sm text-gray-500 font-medium flex items-center gap-2">
+                       <span>Dipinjam: {new Date(tx.transaction_date).toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'})}</span>
+                       {tx.return_date && <span>• Dikembalikan: {new Date(tx.return_date).toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'})}</span>}
+                     </p>
+                   </div>
+                </div>
+                <div className="flex items-center gap-4 md:text-right ml-14 md:ml-0">
+                   <div>
+                      {tx.fine_amount > 0 && <span className="block text-sm font-bold text-red-500">Denda: Rp {tx.fine_amount.toLocaleString('id-ID')}</span>}
+                      {tx.type === 'PINJAM' && tx.status === 'BERJALAN' && <span className="block text-sm font-bold text-orange-500">Batas: {new Date(tx.due_date).toLocaleDateString('id-ID')}</span>}
+                   </div>
+                   <div className={cn(
+                     "px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider",
+                     tx.status === 'SELESAI' ? "bg-green-100 text-green-700 border border-green-200" :
+                     tx.status === 'TERLAMBAT' ? "bg-red-100 text-red-700 border border-red-200" :
+                     "bg-orange-100 text-orange-700 border border-orange-200"
+                   )}>
+                     {tx.status}
+                   </div>
+                </div>
+              </div>
+            ))}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

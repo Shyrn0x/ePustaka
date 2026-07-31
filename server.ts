@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import express from "express";
 import cors from "cors";
 import path from "path";
@@ -12,6 +13,32 @@ const PORT = 3000;
 
 let lastRFIDScan: { uid: string | null, timestamp: number } = { uid: null, timestamp: 0 };
 let transactionVersion = 0;
+
+
+const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-123';
+
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (token == null) return res.sendStatus(401);
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+}
+
+function requireAdmin(req, res, next) {
+  authenticateToken(req, res, () => {
+    if (req.user && req.user.role === 'ADMIN') {
+      next();
+    } else {
+      res.sendStatus(403);
+    }
+  });
+}
 
 async function startServer() {
   const app = express();
@@ -61,6 +88,21 @@ async function startServer() {
     try {
       await db.execute("ALTER TABLE transactions ADD COLUMN return_date DATETIME");
     } catch(e: any) { /* ignore if exists */ }
+    
+    // Insert dummy user for testing if it doesn't exist
+    try {
+      const [existing]: any = await db.execute("SELECT id FROM users WHERE student_id = '12345678'");
+      if (existing.length === 0) {
+        await db.execute(
+          "INSERT INTO users (rfid_uid, name, student_id, role, max_borrow_limit) VALUES (?, ?, ?, ?, ?)",
+          ['dummy123', 'Budi Santoso (Test User)', '12345678', 'SISWA', 5]
+        );
+        console.log("Inserted dummy user: 12345678");
+      }
+    } catch(e: any) { 
+      console.error("Failed to insert dummy user", e);
+    }
+
 
   } catch (err) {
     console.error("Failed to connect to MySQL database:", err);
@@ -83,7 +125,7 @@ async function startServer() {
   // Endpoint API (GET) ini digunakan untuk mengambil seluruh daftar anggota perpustakaan.
   // Jika database MySQL terhubung, akan mengeksekusi "SELECT * FROM users".
   // Jika database gagal, akan menggunakan data tiruan (mockMembers) agar aplikasi tidak crash.
-  app.get("/api/members", async (req, res) => {
+  app.get("/api/members", requireAdmin, async (req, res) => {
     if (!db) return res.json(mockMembers);
     try {
       const [rows] = await db.execute("SELECT * FROM users ORDER BY created_at DESC");
@@ -94,7 +136,7 @@ async function startServer() {
   });
 
   // Add Member
-  app.post("/api/members", async (req, res) => {
+  app.post("/api/members", requireAdmin, async (req, res) => {
     const { rfid_uid, name, student_id, role, max_borrow_limit } = req.body;
     if (!db) {
       if (mockMembers.some(m => m.rfid_uid === rfid_uid || m.student_id === student_id)) {
@@ -147,7 +189,7 @@ async function startServer() {
   });
 
   // Add Book
-  app.post("/api/books", async (req, res) => {
+  app.post("/api/books", requireAdmin, async (req, res) => {
     const { qr_code, title, author, isbn, category, total_copies, publisher } = req.body;
     if (!db) {
       const newBook = { id: mockBooks.length + 1, qr_code, title, author, isbn, category, total_copies, available_copies: total_copies, publisher };
@@ -167,7 +209,7 @@ async function startServer() {
   });
 
   // Delete Book
-  app.delete("/api/books/:id", async (req, res) => {
+  app.delete("/api/books/:id", requireAdmin, async (req, res) => {
     const id = req.params.id;
     console.log("DELETE /api/books/:id", id);
     if (!db) {
@@ -190,7 +232,7 @@ async function startServer() {
   });
 
   // Update Book
-  app.put("/api/books/:id", async (req, res) => {
+  app.put("/api/books/:id", requireAdmin, async (req, res) => {
     console.log("PUT /api/books/:id", req.params.id, req.body);
     const { qr_code, title, author, isbn, category, total_copies, publisher } = req.body;
     if (!db) {
@@ -217,7 +259,7 @@ async function startServer() {
   // untuk memastikan member tersebut TIDAK MEMILIKI status 'BERJALAN' (belum mengembalikan buku).
   // Jika memiliki tanggungan, akan menolak hapus dan melempar error 400.
   // Jika bersih, akan menghapus log riwayatnya dulu, baru menghapus membernya. (Foreign Key Constraint handling)
-  app.delete("/api/members/:id", async (req, res) => {
+  app.delete("/api/members/:id", requireAdmin, async (req, res) => {
     const id = req.params.id;
     console.log("DELETE /api/members/:id", id);
     if (!db) {
@@ -251,7 +293,7 @@ async function startServer() {
   });
 
   // Update Member
-  app.put("/api/members/:id", async (req, res) => {
+  app.put("/api/members/:id", requireAdmin, async (req, res) => {
     console.log("PUT /api/members/:id", req.params.id, req.body);
     const { rfid_uid, name, student_id, role, max_borrow_limit } = req.body;
     if (!db) {
@@ -271,8 +313,48 @@ async function startServer() {
     }
   });
 
+  // Get User History
+  app.get("/api/users/:id/history", authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    if (!db) {
+      const history = mockTransactions
+        .filter((t: any) => t.member_id === parseInt(id))
+        .sort((a: any, b: any) => new Date(b.transaction_date).getTime() - new Date(a.transaction_date).getTime());
+      
+      // enrich with book title
+      const enrichedHistory = history.map(tx => {
+        const book = mockBooks.find(b => b.id === tx.book_id);
+        return { ...tx, book_title: book ? book.title : "Buku" };
+      });
+      return res.json(enrichedHistory);
+    }
+    
+    try {
+      // Auto-update status to TERLAMBAT and calculate fines for ongoing transactions
+      await db.execute(`
+        UPDATE transactions 
+        SET 
+          status = CASE WHEN NOW() > due_date THEN 'TERLAMBAT' ELSE status END,
+          fine_amount = CASE WHEN NOW() > due_date THEN DATEDIFF(NOW(), due_date) * 1000 ELSE fine_amount END
+        WHERE status IN ('BERJALAN', 'TERLAMBAT') AND member_id = ?
+      `, [id]);
+      
+      const [rows] = await db.execute(`
+        SELECT t.*, b.title as book_title
+        FROM transactions t
+        JOIN books b ON t.book_id = b.id
+        WHERE t.member_id = ?
+        ORDER BY IFNULL(t.return_date, t.transaction_date) DESC
+      `, [id]);
+      res.json(rows);
+    } catch(e) {
+       console.error("Failed to fetch user history", e);
+       res.status(500).json({ error: "Failed to fetch user history" });
+    }
+  });
+
 // Get Transactions / Report
-  app.get("/api/transactions", async (req, res) => {
+  app.get("/api/transactions", requireAdmin, async (req, res) => {
     if (!db) return res.json([...mockTransactions].sort((a: any, b: any) => new Date(b.return_date || b.transaction_date).getTime() - new Date(a.return_date || a.transaction_date).getTime()));
     try {
       // Auto-update status to TERLAMBAT and calculate fines for ongoing transactions
@@ -327,7 +409,7 @@ async function startServer() {
   });
 
   // Check Member by RFID
-  app.get("/api/members/:rfid_uid", async (req, res) => {
+  app.get("/api/members/:rfid_uid", authenticateToken, async (req, res) => {
     if (!db) {
       const m = mockMembers.find(m => m.rfid_uid === req.params.rfid_uid);
       if (m) {
@@ -367,7 +449,7 @@ async function startServer() {
   });
 
   // Update Fine
-  app.put("/api/transactions/:id/fine", async (req, res) => {
+  app.put("/api/transactions/:id/fine", requireAdmin, async (req, res) => {
     if (!db) return res.status(400).json({ error: "Demo mode" });
     const { fine_amount, fine_status } = req.body;
     try {
@@ -387,7 +469,7 @@ async function startServer() {
   // Endpoint API (POST) yang sangat krusial. Digunakan untuk Peminjaman (PINJAM) dan Pengembalian (KEMBALI)
   // - Peminjaman: Mengecek stok buku > 0. Jika ada, melakukan INSERT ke transactions & UPDATE books (kurangi stok -1).
   // - Pengembalian: Melakukan UPDATE status transactions menjadi 'SELESAI' & UPDATE books (tambah stok +1).
-  app.post("/api/transactions", async (req, res) => {
+  app.post("/api/transactions", authenticateToken, async (req, res) => {
     const { member_id, book_id, type } = req.body;
     
     if (!db) {
@@ -498,33 +580,61 @@ async function startServer() {
     // Demo Fallback Login
     if (!db) {
       if (username === 'admin' && password === 'admin123') {
+        const adminUser = { username: 'admin', role: 'ADMIN' };
+        const token = jwt.sign(adminUser, JWT_SECRET, { expiresIn: '12h' });
         return res.json({ 
-          success: true, 
-          user: { username: 'admin', role: 'ADMIN' },
+           success: true, 
+           user: adminUser,
+           token,
+          remoteUrl: process.env.APP_URL || "http://localhost:3000"
+        });
+      }
+      const demoUser = mockMembers.find(m => (m.student_id === username || m.username === username || m.rfid_uid === username) && (password === m.student_id || (username === m.rfid_uid && (!password || password === ''))));
+      if (demoUser) {
+        const token = jwt.sign(demoUser, JWT_SECRET, { expiresIn: '12h' });
+        return res.json({ 
+           success: true, 
+           user: demoUser,
+           token,
           remoteUrl: process.env.APP_URL || "http://localhost:3000"
         });
       }
       return res.status(401).json({ error: "Invalid demo credentials" });
     }
-
+    
     try {
-      const [rows]: any = await db.execute("SELECT * FROM users WHERE role = 'ADMIN' AND username = ?", [username]);
+      const [rows]: any = await db.execute("SELECT * FROM users WHERE username = ? OR rfid_uid = ?", [username, username]);
       if (rows.length > 0) {
         const user = rows[0];
-        const dbPassword = user.password || user.password_hash;
-        
-        // Use bcrypt to compare password
-        const isMatch = await bcrypt.compare(password, dbPassword);
-        
-        if (isMatch) {
-          return res.json({ 
-            success: true, 
-            user: { username: user.username, role: user.role || 'ADMIN' },
-            remoteUrl: process.env.APP_URL || "http://localhost:3000"
-          });
+        if (user.role === 'ADMIN') {
+          const dbPassword = user.password || user.password_hash;
+          const isMatch = await bcrypt.compare(password, dbPassword);
+          if (isMatch) {
+            const tokenUser = { id: user.id, username: user.username, role: user.role || 'ADMIN', name: user.name };
+            const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
+            return res.json({ 
+               success: true, 
+               user: tokenUser,
+               token,
+              remoteUrl: process.env.APP_URL || "http://localhost:3000"
+            });
+          }
+        } else {
+          // For SISWA or GURU, password is by default their student_id if not set otherwise
+          // If login via RFID, password can be empty
+          if (password === user.student_id || (username === user.rfid_uid && (!password || password === ''))) {
+             const tokenUser = { id: user.id, username: user.student_id, role: user.role, name: user.name };
+             const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
+             return res.json({ 
+               success: true, 
+               user: tokenUser,
+               token,
+              remoteUrl: process.env.APP_URL || "http://localhost:3000"
+            });
+          }
         }
       }
-      res.status(401).json({ error: "Invalid credentials" });
+      res.status(401).json({ error: "Username/RFID atau Password salah" });
     } catch (err) {
       console.error("Login Error:", err);
       res.status(500).json({ error: "Login failed" });
@@ -532,13 +642,13 @@ async function startServer() {
   });
 
   // Transactions Version Endpoint for Polling
-  app.get("/api/transactions/version", (req, res) => {
+  app.get("/api/transactions/version", requireAdmin, (req, res) => {
     res.json({ version: transactionVersion });
   });
 
 
   // Visitor Stats
-  app.get("/api/stats/visitors", async (req, res) => {
+  app.get("/api/stats/visitors", requireAdmin, async (req, res) => {
 if (!db) {
       const grouped: Record<string, Set<number>> = {};
       mockTransactions.forEach(t => {

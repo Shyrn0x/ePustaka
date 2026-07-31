@@ -16,7 +16,28 @@ window.addEventListener('unhandledrejection', (event) => {
   }
 });
 
+
+const originalFetch = window.fetch;
+Object.defineProperty(window, 'fetch', {
+  value: async (...args: any[]) => {
+    const [resource, config] = args;
+    const token = localStorage.getItem('token');
+    if (token && typeof resource === 'string' && resource.startsWith('/api/')) {
+      const newConfig = config || {};
+      newConfig.headers = {
+        ...newConfig.headers,
+        'Authorization': `Bearer ${token}`
+      };
+      return originalFetch(resource, newConfig);
+    }
+    return originalFetch(...args);
+  },
+  configurable: true,
+  writable: true
+});
+
 createRoot(document.getElementById('root')!).render(
+
   <StrictMode>
     <App />
   </StrictMode>,
