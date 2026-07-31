@@ -1,3 +1,4 @@
+import bcrypt from "bcryptjs";
 import express from "express";
 import cors from "cors";
 import path from "path";
@@ -63,6 +64,7 @@ async function startServer() {
 
   } catch (err) {
     console.error("Failed to connect to MySQL database:", err);
+    db = null; // Set to null so fallback mode activates
   }
 
   // --- Mock Data for Demo/Preview Mode ---
@@ -77,10 +79,14 @@ async function startServer() {
   // --- API Routes ---
 
   // Get all members
+  // 📝 KETERANGAN FUNGSI:
+  // Endpoint API (GET) ini digunakan untuk mengambil seluruh daftar anggota perpustakaan.
+  // Jika database MySQL terhubung, akan mengeksekusi "SELECT * FROM users".
+  // Jika database gagal, akan menggunakan data tiruan (mockMembers) agar aplikasi tidak crash.
   app.get("/api/members", async (req, res) => {
     if (!db) return res.json(mockMembers);
     try {
-      const [rows] = await db.execute("SELECT * FROM members ORDER BY created_at DESC");
+      const [rows] = await db.execute("SELECT * FROM users ORDER BY created_at DESC");
       res.json(rows);
     } catch (err) {
       res.json(mockMembers);
@@ -99,13 +105,13 @@ async function startServer() {
       return res.json({ message: "Member added (Demo Mode)" });
     }
     try {
-      const [existing]: any = await db.execute("SELECT id FROM members WHERE rfid_uid = ? OR student_id = ?", [rfid_uid, student_id]);
+      const [existing]: any = await db.execute("SELECT id FROM users WHERE rfid_uid = ? OR student_id = ?", [rfid_uid, student_id]);
       if (existing.length > 0) {
         return res.status(400).json({ error: "RFID or Student ID sudah terdaftar!" });
       }
       
       await db.execute(
-        "INSERT INTO members (rfid_uid, name, student_id, role, max_borrow_limit) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO users (rfid_uid, name, student_id, role, max_borrow_limit) VALUES (?, ?, ?, ?, ?)",
         [rfid_uid, name, student_id, role || 'SISWA', parseInt(req.body.max_borrow_limit) || 5]
       );
       res.json({ message: "Member added successfully" });
@@ -205,6 +211,12 @@ async function startServer() {
   });
 
   // Delete Member
+  // 📝 KETERANGAN FUNGSI:
+  // Endpoint API (DELETE) ini digunakan untuk menghapus seorang anggota.
+  // Memiliki fitur "Guard Logic": Akan mengecek tabel transactions (via SELECT COUNT)
+  // untuk memastikan member tersebut TIDAK MEMILIKI status 'BERJALAN' (belum mengembalikan buku).
+  // Jika memiliki tanggungan, akan menolak hapus dan melempar error 400.
+  // Jika bersih, akan menghapus log riwayatnya dulu, baru menghapus membernya. (Foreign Key Constraint handling)
   app.delete("/api/members/:id", async (req, res) => {
     const id = req.params.id;
     console.log("DELETE /api/members/:id", id);
@@ -216,7 +228,7 @@ async function startServer() {
     }
     try {
       const [borrowingCheck]: any = await db.execute(
-        "SELECT COUNT(*) as count FROM transactions WHERE member_id = ? AND status = 'BERJALAN'",
+        "SELECT COUNT(*) as count FROM transactions WHERE member_id = ? AND status IN ('BERJALAN', 'TERLAMBAT')",
         [Number(id)]
       );
       if (borrowingCheck[0].count > 0) {
@@ -226,7 +238,7 @@ async function startServer() {
       // Hapus riwayat transaksi agar tidak terjadi error foreign key saat member dihapus
       await db.execute("DELETE FROM transactions WHERE member_id = ?", [Number(id)]);
 
-      const [result]: any = await db.execute("DELETE FROM members WHERE id = ?", [Number(id)]);
+      const [result]: any = await db.execute("DELETE FROM users WHERE id = ?", [Number(id)]);
       console.log("Database delete member result:", result);
       if (result.affectedRows === 0) {
         return res.status(404).json({ error: "Member not found" });
@@ -249,7 +261,7 @@ async function startServer() {
     }
     try {
       await db.execute(
-        "UPDATE members SET rfid_uid = ?, name = ?, student_id = ?, role = ?, max_borrow_limit = ? WHERE id = ?",
+        "UPDATE users SET rfid_uid = ?, name = ?, student_id = ?, role = ?, max_borrow_limit = ? WHERE id = ?",
         [rfid_uid, name, student_id, role, parseInt(req.body.max_borrow_limit) || 5, req.params.id]
       );
       res.json({ message: "Member updated" });
@@ -259,19 +271,30 @@ async function startServer() {
     }
   });
 
-  // Get Transactions / Report
+// Get Transactions / Report
   app.get("/api/transactions", async (req, res) => {
     if (!db) return res.json([...mockTransactions].sort((a: any, b: any) => new Date(b.return_date || b.transaction_date).getTime() - new Date(a.return_date || a.transaction_date).getTime()));
     try {
+      // Auto-update status to TERLAMBAT and calculate fines for ongoing transactions
+      await db.execute(`
+        UPDATE transactions 
+        SET 
+          status = CASE WHEN NOW() > due_date THEN 'TERLAMBAT' ELSE status END,
+          fine_amount = CASE WHEN NOW() > due_date THEN DATEDIFF(NOW(), due_date) * 1000 ELSE fine_amount END
+        WHERE status IN ('BERJALAN', 'TERLAMBAT')
+      `);
+
       const [rows] = await db.execute(`
         SELECT t.*, m.name as member_name, b.title as book_title 
         FROM transactions t
-        JOIN members m ON t.member_id = m.id
+        JOIN users m ON t.member_id = m.id
         JOIN books b ON t.book_id = b.id
         ORDER BY IFNULL(t.return_date, t.transaction_date) DESC
       `);
+      
       res.json(rows);
     } catch (err) {
+      console.error(err);
       res.json([...mockTransactions].sort((a: any, b: any) => new Date(b.return_date || b.transaction_date).getTime() - new Date(a.return_date || a.transaction_date).getTime()));
     }
   });
@@ -308,14 +331,14 @@ async function startServer() {
     if (!db) {
       const m = mockMembers.find(m => m.rfid_uid === req.params.rfid_uid);
       if (m) {
-        const active_borrows = mockTransactions.filter(t => t.member_id === m.id && t.status === 'BERJALAN').length;
+        const active_borrows = mockTransactions.filter(t => t.member_id === m.id && ['BERJALAN', 'TERLAMBAT'].includes(t.status)).length;
         return res.json({ ...m, active_borrows });
       }
       return res.status(404).json({ error: "Not found" });
     }
     try {
       const [rows]: any = await db.execute(
-        "SELECT m.*, (SELECT COUNT(*) FROM transactions t WHERE t.member_id = m.id AND t.status = 'BERJALAN') as active_borrows FROM members m WHERE m.rfid_uid = ?", 
+        "SELECT m.*, (SELECT COUNT(*) FROM transactions t WHERE t.member_id = m.id AND t.status IN ('BERJALAN', 'TERLAMBAT')) as active_borrows FROM users m WHERE m.rfid_uid = ?", 
         [req.params.rfid_uid]
       );
       if (rows.length === 0) return res.status(404).json({ error: "Member not found" });
@@ -360,6 +383,10 @@ async function startServer() {
   });
 
   // Post Transaction (Pinjam/Kembali)
+  // 📝 KETERANGAN FUNGSI:
+  // Endpoint API (POST) yang sangat krusial. Digunakan untuk Peminjaman (PINJAM) dan Pengembalian (KEMBALI)
+  // - Peminjaman: Mengecek stok buku > 0. Jika ada, melakukan INSERT ke transactions & UPDATE books (kurangi stok -1).
+  // - Pengembalian: Melakukan UPDATE status transactions menjadi 'SELESAI' & UPDATE books (tambah stok +1).
   app.post("/api/transactions", async (req, res) => {
     const { member_id, book_id, type } = req.body;
     
@@ -388,7 +415,7 @@ async function startServer() {
           fine_status: 'BELUM_LUNAS'
         });
       } else {
-        const tx = mockTransactions.find(t => t.member_id === member_id && t.book_id === book_id && t.status === 'BERJALAN');
+        const tx = mockTransactions.find(t => t.member_id === member_id && t.book_id === book_id && ['BERJALAN', 'TERLAMBAT'].includes(t.status));
         if (!tx) return res.status(400).json({ error: "Tidak ada pinjaman aktif" });
         
         let fine = 0;
@@ -414,10 +441,10 @@ async function startServer() {
           return res.status(400).json({ error: "Anda memiliki denda yang belum dilunasi. Harap lunasi denda ke admin terlebih dahulu!" });
         }
 
-        const [memRows]: any = await db.execute("SELECT max_borrow_limit FROM members WHERE id = ?", [member_id]);
+        const [memRows]: any = await db.execute("SELECT max_borrow_limit FROM users WHERE id = ?", [member_id]);
         const maxLimit = memRows[0]?.max_borrow_limit ?? 5;
 
-        const [activeTxMem]: any = await db.execute("SELECT COUNT(*) as cnt FROM transactions WHERE member_id = ? AND status = 'BERJALAN'", [member_id]);
+        const [activeTxMem]: any = await db.execute("SELECT COUNT(*) as cnt FROM transactions WHERE member_id = ? AND status IN ('BERJALAN', 'TERLAMBAT')", [member_id]);
         if (activeTxMem[0].cnt >= maxLimit) {
           return res.status(400).json({ error: `Peminjaman maksimal adalah ${maxLimit} buku!` });
         }
@@ -435,7 +462,7 @@ async function startServer() {
         res.json({ message: "Transaction successful" });
       } else {
         const [activeTx]: any = await db.execute(
-          "SELECT id, due_date FROM transactions WHERE member_id = ? AND book_id = ? AND type = 'PINJAM' AND status = 'BERJALAN' LIMIT 1",
+          "SELECT id, due_date FROM transactions WHERE member_id = ? AND book_id = ? AND type = 'PINJAM' AND status IN ('BERJALAN', 'TERLAMBAT') LIMIT 1",
           [member_id, book_id]
         );
         
@@ -462,6 +489,9 @@ async function startServer() {
   });
 
   // Admin Login
+
+
+  // Login Endpoint (Admin)
   app.post("/api/login", async (req, res) => {
     const { username, password } = req.body;
     
@@ -478,12 +508,15 @@ async function startServer() {
     }
 
     try {
-      const [rows]: any = await db.execute("SELECT * FROM admins WHERE username = ?", [username]);
+      const [rows]: any = await db.execute("SELECT * FROM users WHERE role = 'ADMIN' AND username = ?", [username]);
       if (rows.length > 0) {
         const user = rows[0];
         const dbPassword = user.password || user.password_hash;
         
-        if (dbPassword === password) {
+        // Use bcrypt to compare password
+        const isMatch = await bcrypt.compare(password, dbPassword);
+        
+        if (isMatch) {
           return res.json({ 
             success: true, 
             user: { username: user.username, role: user.role || 'ADMIN' },
@@ -493,6 +526,7 @@ async function startServer() {
       }
       res.status(401).json({ error: "Invalid credentials" });
     } catch (err) {
+      console.error("Login Error:", err);
       res.status(500).json({ error: "Login failed" });
     }
   });
@@ -502,19 +536,47 @@ async function startServer() {
     res.json({ version: transactionVersion });
   });
 
+
+  // Visitor Stats
+  app.get("/api/stats/visitors", async (req, res) => {
+if (!db) {
+      const grouped: Record<string, Set<number>> = {};
+      mockTransactions.forEach(t => {
+        const d = new Date(t.transaction_date);
+        const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}`;
+        if (!grouped[m]) grouped[m] = new Set();
+        grouped[m].add(t.member_id);
+      });
+      const resData = Object.keys(grouped).sort().map(k => ({ month: k, visitors: grouped[k].size }));
+      return res.json(resData);
+    }
+    try {
+      const [rows]: any = await db.execute(`
+        SELECT DATE_FORMAT(transaction_date, '%Y-%m') as month, COUNT(DISTINCT member_id) as visitors
+        FROM transactions
+        GROUP BY month
+        ORDER BY month ASC
+      `);
+      res.json(rows);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Visitor stats failed" });
+    }
+  });
+
   // Analytics
   app.get("/api/stats", async (req, res) => {
     if (!db) {
       return res.json({
         totalBooks: mockBooks.reduce((acc, b) => acc + b.total_copies, 0),
-        borrowedBooks: mockTransactions.filter(t => t.status === 'BERJALAN').length,
+        borrowedBooks: mockTransactions.filter(t => ['BERJALAN', 'TERLAMBAT'].includes(t.status)).length,
         activeMembers: mockMembers.length
       });
     }
     try {
       const [totalBooks]: any = await db.execute("SELECT SUM(total_copies) as count FROM books");
-      const [borrowedBooks]: any = await db.execute("SELECT COUNT(*) as count FROM transactions WHERE status = 'BERJALAN'");
-      const [activeMembers]: any = await db.execute("SELECT COUNT(*) as count FROM members");
+      const [borrowedBooks]: any = await db.execute("SELECT COUNT(*) as count FROM transactions WHERE status IN ('BERJALAN', 'TERLAMBAT')");
+      const [activeMembers]: any = await db.execute("SELECT COUNT(*) as count FROM users");
       res.json({
         totalBooks: totalBooks[0].count || 0,
         borrowedBooks: borrowedBooks[0].count || 0,

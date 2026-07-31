@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsQR from 'jsqr';
 import { 
@@ -18,11 +18,44 @@ import {
   Database,
   CheckCircle2,
   XCircle,
-  Book
+  Book,
+  Download
 } from 'lucide-react';
 import { cn } from './lib/utils';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 type ViewState = 'HOME' | 'PINJAM' | 'KEMBALI' | 'KATALOG' | 'STAFF_LOGIN' | 'DASHBOARD';
+
+
+const useSortableData = (items: any[], config: { key: string, direction: 'asc' | 'desc' } | null = null) => {
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(config);
+
+  const sortedItems = useMemo(() => {
+    let sortableItems = [...items];
+    if (sortConfig !== null) {
+      sortableItems.sort((a, b) => {
+        if (a[sortConfig.key] < b[sortConfig.key]) {
+          return sortConfig.direction === 'asc' ? -1 : 1;
+        }
+        if (a[sortConfig.key] > b[sortConfig.key]) {
+          return sortConfig.direction === 'asc' ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    return sortableItems;
+  }, [items, sortConfig]);
+
+  const requestSort = (key: string) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  return { items: sortedItems, requestSort, sortConfig };
+};
 
 export default function App() {
   const [view, setView] = useState<ViewState>('HOME');
@@ -220,7 +253,7 @@ function ActionView({ title, onBack, type }: { title: string, onBack: () => void
       if (type === 'KEMBALI' && !activeLoansFetched && member) {
         setActiveLoansFetched(true);
         fetch('/api/transactions').then(res => res.json()).then(txs => {
-          const userTx = (Array.isArray(txs) ? txs : []).filter(t => t.member_id === member.id && t.status === 'BERJALAN');
+          const userTx = (Array.isArray(txs) ? txs : []).filter(t => t.member_id === member.id && (t.status === 'BERJALAN' || t.status === 'TERLAMBAT'));
           setActiveLoans(userTx);
         }).catch(() => {});
       }
@@ -362,6 +395,10 @@ function ActionView({ title, onBack, type }: { title: string, onBack: () => void
   };
 
   // RFID scanners usually act as keyboards. We listen for 'Enter' key.
+  // 📝 KETERANGAN FUNGSI:
+  // Fungsi utama untuk menangani input dari alat RFID Scanner (yang bertindak sebagai keyboard).
+  // Saat kartu didekatkan, alat akan "mengetik" nomor seri dan diakhiri dengan tombol 'Enter'.
+  // Fungsi ini menangkap hasil ketikan tersebut untuk memproses ID anggota atau QR Code buku.
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
       // Ignore keyboard if not idle
@@ -453,7 +490,7 @@ function ActionView({ title, onBack, type }: { title: string, onBack: () => void
                 
                 if (code && code.data && code.data.trim() !== '') {
                   // Ensure only non-empty strings are sent
-                  processQrCode(code.data);
+                  processQrCode(code.data.trim());
                 }
               }
             }
@@ -657,6 +694,7 @@ function KatalogView({ onBack }: { onBack: () => void }) {
   const [books, setBooks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [filterMonth, setFilterMonth] = useState("");
   const [selectedBook, setSelectedBook] = useState<any>(null);
 
   useEffect(() => {
@@ -945,8 +983,13 @@ function StaffDashboard({ onLogout, remoteUrl }: { onLogout: () => void, remoteU
                 <StatCard label="Anggota Aktif" value={stats.activeMembers} icon={<User size={28} />} color="text-emerald-600" bg="bg-emerald-50" border="border-emerald-100" />
               </div>
 
-              <div className="flex-1 min-h-0">
-                <RecentActivity />
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2">
+                  <VisitorStats />
+                </div>
+                <div className="lg:col-span-1">
+                  <RecentActivity />
+                </div>
               </div>
             </div>
           )}
@@ -980,6 +1023,7 @@ import { QRCodeSVG } from 'qrcode.react';
 function BookManagementView() {
   const [books, setBooks] = useState<any[]>([]);
   const [search, setSearch] = useState("");
+  const [filterMonth, setFilterMonth] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [formData, setFormData] = useState<any>({ qr_code: '', title: '', author: '', publisher: '', isbn: '', category: '', total_copies: 1 });
 
@@ -994,6 +1038,11 @@ function BookManagementView() {
     b.qr_code.toLowerCase().includes(search.toLowerCase())
   );
 
+  const { items: sortedBooks, requestSort: requestSortBooks, sortConfig: sortConfigBooks } = useSortableData(filteredBooks);
+
+  // 📝 KETERANGAN FUNGSI:
+  // Fungsi untuk memanggil API penghapusan Buku.
+  // Sama seperti member, jika berhasil dihapus, fungsi akan me-refresh daftar buku terbaru (loadBooks).
   const executeDelete = async (id: number) => {
     const url = `/api/books/${id}`;
     try {
@@ -1086,6 +1135,14 @@ function BookManagementView() {
       <div className="flex justify-between items-center">
         <h3 className="text-xl font-bold text-gray-800">Manajemen Buku</h3>
         <div className="flex gap-4 items-center">
+          <div className="relative">
+            <input
+              type="month"
+              value={filterMonth}
+              onChange={e => setFilterMonth(e.target.value)}
+              className="px-4 py-2 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-indigo-400 outline-none w-40 text-gray-600"
+            />
+          </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
             <input 
@@ -1185,14 +1242,16 @@ function BookManagementView() {
           <table className="w-full min-w-[500px] text-left text-sm">
             <thead className="bg-gray-50 text-gray-400 text-[10px] font-black uppercase border-b">
               <tr>
-                <th className="px-6 py-4">QR</th>
-                <th className="px-6 py-4">Buku</th>
-                <th className="px-6 py-4">Tersedia</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortBooks('qr_code')}>QR {sortConfigBooks?.key === 'qr_code' ? (sortConfigBooks.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortBooks('title')}>Buku {sortConfigBooks?.key === 'title' ? (sortConfigBooks.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortBooks('author')}>Penulis {sortConfigBooks?.key === 'author' ? (sortConfigBooks.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortBooks('category')}>Kategori {sortConfigBooks?.key === 'category' ? (sortConfigBooks.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th className="px-6 py-4 cursor-pointer hover:bg-gray-100" onClick={() => requestSortBooks('available_copies')}>Tersedia {sortConfigBooks?.key === 'available_copies' ? (sortConfigBooks.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th className="px-6 py-4 text-right">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y">
-              {filteredBooks.map((b: any) => (
+              {sortedBooks.map((b: any) => (
                 <tr key={b.id} className="hover:bg-gray-50/50">
                   <td className="px-6 py-4">
                     <div id={`qr-${b.qr_code}`} className="hidden"><QRCodeSVG value={b.qr_code} size={256} includeMargin={true} bgColor="#ffffff" fgColor="#000000" level="H" /></div>
@@ -1200,6 +1259,12 @@ function BookManagementView() {
                   </td>
                   <td className="px-6 py-4">
                     <p className="font-bold text-gray-800">{b.title}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="text-gray-600 text-xs">{b.author}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="text-gray-600 text-xs">{b.category || '-'}</p>
                   </td>
                   <td className="px-6 py-4 font-bold text-indigo-600">{b.available_copies}/{b.total_copies}</td>
                   <td className="px-6 py-4 text-right flex items-center justify-end gap-2">
@@ -1239,6 +1304,7 @@ function MemberManagementView() {
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [members, setMembers] = useState<any[]>([]);
   const [search, setSearch] = useState("");
+  const [filterMonth, setFilterMonth] = useState("");
   const [regStep, setRegStep] = useState<'IDLE' | 'SCANNING' | 'FORM'>('IDLE');
   const [formData, setFormData] = useState<any>({ rfid_uid: '', name: '', student_id: '', role: 'SISWA', max_borrow_limit: 5 });
   const [scannedInput, setScannedInput] = useState("");
@@ -1252,6 +1318,12 @@ function MemberManagementView() {
     m.rfid_uid.toLowerCase().includes(search.toLowerCase())
   );
 
+  const { items: sortedMembers, requestSort: requestSortMembers, sortConfig: sortConfigMembers } = useSortableData(filteredMembers);
+
+  // 📝 KETERANGAN FUNGSI:
+  // Fungsi (Event Handler) untuk menghapus data anggota dengan memanggil API ke Backend.
+  // Jika gagal (misal karena constraint Foreign Key), akan menangkap pesan error dari server
+  // lalu memunculkannya melalui window.alert() kepada admin.
   const executeDelete = async (id: number) => {
     const url = `/api/members/${id}`;
     try {
@@ -1471,16 +1543,16 @@ function MemberManagementView() {
           <table className="w-full min-w-[600px] text-left">
           <thead className="bg-gray-50/50 text-gray-400 text-[10px] font-black uppercase tracking-widest border-b">
             <tr>
-              <th className="px-6 py-4 tracking-tighter">UID Kartu</th>
-              <th className="px-6 py-4">Nama Lengkap</th>
-              <th className="px-6 py-4">NISN</th>
-              <th className="px-6 py-4">Maks Pinjam</th>
-              <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('rfid_uid')}>UID Kartu {sortConfigMembers?.key === 'rfid_uid' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('name')}>Nama Lengkap {sortConfigMembers?.key === 'name' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('student_id')}>NISN {sortConfigMembers?.key === 'student_id' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('max_borrow_limit')}>Maks Pinjam {sortConfigMembers?.key === 'max_borrow_limit' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('role')}>Status {sortConfigMembers?.key === 'role' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
               <th className="px-6 py-4 text-right">Aksi</th>
             </tr>
           </thead>
           <tbody className="divide-y text-sm">
-            {filteredMembers.map((m: any) => (
+            {sortedMembers.map((m: any) => (
               <tr key={m.id} className="hover:bg-gray-50/30 transition-colors">
                 <td className="px-6 py-4">
                   <span className="font-mono text-[10px] text-gray-500 font-bold bg-gray-100 px-2 py-1 rounded">{m.rfid_uid}</span>
@@ -1525,6 +1597,7 @@ function MemberManagementView() {
 function FinesView() {
   const [data, setData] = useState<any[]>([]);
   const [search, setSearch] = useState("");
+  const [filterMonth, setFilterMonth] = useState("");
   const [editTarget, setEditTarget] = useState<any>(null);
   const [editAmount, setEditAmount] = useState(0);
 
@@ -1569,10 +1642,11 @@ function FinesView() {
     }
   };
 
-  const filtered = data.filter(t => t.fine_amount > 0 && (
+const filtered = data.filter(t => t.fine_amount > 0 && (
     t.member_name.toLowerCase().includes(search.toLowerCase()) || 
     t.book_title.toLowerCase().includes(search.toLowerCase())
   ));
+  const { items: sortedFines, requestSort: requestSortTxs, sortConfig: sortConfigTxs } = useSortableData(filtered);
 
   return (
     <div className="space-y-6">
@@ -1594,16 +1668,16 @@ function FinesView() {
         <table className="w-full min-w-[700px] text-left text-sm">
           <thead className="bg-gray-50 text-gray-400 text-[10px] font-black uppercase border-b">
             <tr>
-              <th className="px-6 py-4">Waktu</th>
-              <th className="px-6 py-4">Anggota</th>
-              <th className="px-6 py-4">Buku</th>
-              <th className="px-6 py-4">Jumlah Denda</th>
-              <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortTxs('transaction_date')}>Waktu {sortConfigTxs?.key === 'transaction_date' ? (sortConfigTxs.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortTxs('member_name')}>Anggota {sortConfigTxs?.key === 'member_name' ? (sortConfigTxs.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortTxs('book_title')}>Buku {sortConfigTxs?.key === 'book_title' ? (sortConfigTxs.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortTxs('fine_amount')}>Jumlah Denda {sortConfigTxs?.key === 'fine_amount' ? (sortConfigTxs.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortTxs('fine_status')}>Status Denda {sortConfigTxs?.key === 'fine_status' ? (sortConfigTxs.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
               <th className="px-6 py-4 text-right">Aksi</th>
             </tr>
           </thead>
           <tbody className="divide-y">
-            {filtered.map((t: any) => (
+            {sortedFines.map((t: any) => (
               <tr key={t.id} className="hover:bg-gray-50/50">
                 <td className="px-6 py-4 text-gray-400 text-[10px] font-bold">
                   {new Date(t.return_date || t.transaction_date).toLocaleDateString('id-ID')}
@@ -1657,6 +1731,7 @@ function FinesView() {
 function ReportView() {
   const [data, setData] = useState<any[]>([]);
   const [search, setSearch] = useState("");
+  const [filterMonth, setFilterMonth] = useState("");
 
   const fetchData = () => {
     fetch('/api/transactions').then(res => res.json()).then(setData);
@@ -1704,24 +1779,79 @@ function ReportView() {
      }
   };
 
-  const filtered = data.filter(t => 
-    t.member_name.toLowerCase().includes(search.toLowerCase()) || 
-    t.book_title.toLowerCase().includes(search.toLowerCase())
-  );
+const filtered = data.filter(t => {
+    const matchSearch = t.member_name.toLowerCase().includes(search.toLowerCase()) || 
+      t.book_title.toLowerCase().includes(search.toLowerCase()) ||
+      t.status.toLowerCase().includes(search.toLowerCase());
+      
+    if (filterMonth) {
+      const txMonth = new Date(t.transaction_date).toISOString().slice(0, 7);
+      return matchSearch && txMonth === filterMonth;
+    }
+    return matchSearch;
+  });
+  const { items: sortedTransactions, requestSort: requestSortTxs, sortConfig: sortConfigTxs } = useSortableData(filtered);
+
+  const handleDownload = () => {
+    if (sortedTransactions.length === 0) {
+      return; // handle silently or use toast in real app
+    }
+    const headers = ["Waktu", "Peminjam", "Buku", "Tipe", "Status", "Denda", "Status Denda"];
+    const csvContent = [
+      headers.join(","),
+      ...sortedTransactions.map((t: any) => 
+        [
+          `"${new Date(t.transaction_date).toLocaleString('id-ID')}"`, 
+          `"${t.member_name}"`, 
+          `"${t.book_title}"`, 
+          `"${t.type}"`, 
+          `"${t.status}"`, 
+          `"${t.fine_amount || 0}"`, 
+          `"${t.fine_status || '-'}"`
+        ].join(",")
+      )
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Rekap_Peminjaman_${new Date().toISOString().slice(0,7)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h3 className="text-xl font-bold text-gray-800">Riwayat Transaksi</h3>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-          <input 
-            type="text" 
-            placeholder="Cari transaksi..." 
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="pl-9 pr-4 py-2 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-indigo-400 outline-none w-64"
-          />
+                <div className="flex flex-col sm:flex-row items-center gap-3">
+          <div className="relative">
+            <input
+              type="month"
+              value={filterMonth}
+              onChange={e => setFilterMonth(e.target.value)}
+              className="px-4 py-2 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-indigo-400 outline-none w-40 text-gray-600"
+            />
+          </div>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input 
+              type="text" 
+              placeholder="Cari transaksi..." 
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="pl-9 pr-4 py-2 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-indigo-400 outline-none w-64"
+            />
+          </div>
+          <button 
+            onClick={handleDownload}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition-colors"
+          >
+            <Download size={16} /> Unduh Rekap
+          </button>
         </div>
       </div>
 
@@ -1729,15 +1859,15 @@ function ReportView() {
         <table className="w-full min-w-[700px] text-left text-sm">
           <thead className="bg-gray-50 text-gray-400 text-[10px] font-black uppercase border-b">
             <tr>
-              <th className="px-6 py-4">Waktu</th>
-              <th className="px-6 py-4">Anggota</th>
-              <th className="px-6 py-4">Buku</th>
-              <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortTxs('transaction_date')}>Waktu {sortConfigTxs?.key === 'transaction_date' ? (sortConfigTxs.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortTxs('member_name')}>Anggota {sortConfigTxs?.key === 'member_name' ? (sortConfigTxs.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortTxs('book_title')}>Buku {sortConfigTxs?.key === 'book_title' ? (sortConfigTxs.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
+              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortTxs('status')}>Status {sortConfigTxs?.key === 'status' ? (sortConfigTxs.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
               <th className="px-6 py-4 text-right">Aksi</th>
             </tr>
           </thead>
           <tbody className="divide-y">
-            {filtered.map((t: any) => (
+            {sortedTransactions.map((t: any) => (
               <tr key={t.id} className="hover:bg-gray-50/50">
                 <td className="px-6 py-4 text-gray-400 text-[10px] font-bold">
                   <div>{new Date(t.transaction_date).toLocaleDateString('id-ID')}</div>
@@ -1752,7 +1882,7 @@ function ReportView() {
                   )}>{t.type}</span>
                 </td>
                 <td className="px-6 py-4 text-right">
-                   {t.type === 'PINJAM' && t.status === 'BERJALAN' && (
+                   {t.type === 'PINJAM' && (t.status === 'BERJALAN' || t.status === 'TERLAMBAT') && (
                      <button onClick={() => handleAdminKembali(t)} className="text-xs font-bold px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors">Kembalikan</button>
                    )}
                 </td>
@@ -1812,6 +1942,57 @@ function RecentActivity() {
           </div>
         ))}
         {logs.length === 0 && <p className="text-center py-8 text-gray-300 text-sm">Tidak ada aktivitas.</p>}
+      </div>
+    </div>
+  );
+}
+
+
+function VisitorStats() {
+  const [data, setData] = useState([]);
+
+  useEffect(() => {
+    fetch('/api/stats/visitors').then(res => res.json()).then(setData);
+  }, []);
+
+  return (
+    <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 flex flex-col h-full">
+      <h3 className="text-xl font-black text-gray-800 mb-6 tracking-tight">Statistik Peminjam per Bulan</h3>
+      <div className="h-64 mb-6">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+            <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#9CA3AF' }} />
+            <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#9CA3AF' }} />
+            <Tooltip 
+              cursor={{ fill: '#F3F4F6' }} 
+              contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }}
+            />
+            <Bar dataKey="visitors" fill="#6366f1" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="overflow-x-auto border border-gray-100 rounded-2xl flex-1">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-gray-50 text-gray-400 text-[10px] font-black uppercase border-b">
+            <tr>
+              <th className="px-6 py-4">Bulan</th>
+              <th className="px-6 py-4 text-right">Jumlah Peminjam</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {data.map((row: any) => (
+              <tr key={row.month} className="hover:bg-gray-50/50">
+                <td className="px-6 py-4 font-medium text-gray-700">{row.month}</td>
+                <td className="px-6 py-4 text-right font-bold text-indigo-600">{row.visitors}</td>
+              </tr>
+            ))}
+            {data.length === 0 && (
+              <tr>
+                <td colSpan={2} className="px-6 py-8 text-center text-gray-400">Belum ada data pengunjung.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

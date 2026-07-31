@@ -1,0 +1,130 @@
+        if (!tx) return res.status(400).json({ error: "Tidak ada pinjaman aktif" });
+        
+        let fine = 0;
+        if (tx.due_date && new Date().getTime() > new Date(tx.due_date).getTime()) {
+          const diffDays = Math.ceil((new Date().getTime() - new Date(tx.due_date).getTime()) / (1000 * 3600 * 24));
+          if (diffDays > 0) fine = diffDays * 1000;
+        }
+
+        tx.status = 'SELESAI';
+        tx.type = 'KEMBALI';
+        tx.return_date = new Date().toISOString();
+        tx.fine_amount = fine;
+        bk.available_copies++;
+      }
+      transactionVersion++;
+      return res.json({ message: "Transaction success (Demo Mode)" });
+    }
+
+    try {
+      if (type === 'PINJAM') {
+        const [unpaidFines]: any = await db.execute("SELECT COUNT(*) as cnt FROM transactions WHERE member_id = ? AND fine_amount > 0 AND fine_status = 'BELUM_LUNAS'", [member_id]);
+        if (unpaidFines[0].cnt > 0) {
+          return res.status(400).json({ error: "Anda memiliki denda yang belum dilunasi. Harap lunasi denda ke admin terlebih dahulu!" });
+        }
+
+        const [memRows]: any = await db.execute("SELECT max_borrow_limit FROM users WHERE id = ?", [member_id]);
+        const maxLimit = memRows[0]?.max_borrow_limit ?? 5;
+
+        const [activeTxMem]: any = await db.execute("SELECT COUNT(*) as cnt FROM transactions WHERE member_id = ? AND status = 'BERJALAN'", [member_id]);
+        if (activeTxMem[0].cnt >= maxLimit) {
+          return res.status(400).json({ error: `Peminjaman maksimal adalah ${maxLimit} buku!` });
+        }
+
+        const [book]: any = await db.execute("SELECT available_copies FROM books WHERE id = ?", [book_id]);
+        if (book[0].available_copies <= 0) return res.status(400).json({ error: "Book out of stock" });
+        
+        await db.execute(
+          "INSERT INTO transactions (member_id, book_id, type, due_date, fine_amount) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY), 0)",
+          [member_id, book_id, type]
+        );
+        await db.execute("UPDATE books SET available_copies = available_copies - 1 WHERE id = ?", [book_id]);
+        
+        transactionVersion++;
+        res.json({ message: "Transaction successful" });
+      } else {
+        const [activeTx]: any = await db.execute(
+          "SELECT id, due_date FROM transactions WHERE member_id = ? AND book_id = ? AND type = 'PINJAM' AND status = 'BERJALAN' LIMIT 1",
+          [member_id, book_id]
+        );
+        
+        if (activeTx.length === 0) return res.status(400).json({ error: "Buku ini tidak sedang Anda pinjam." });
+        
+        let fine = 0;
+        if (activeTx[0].due_date && new Date().getTime() > new Date(activeTx[0].due_date).getTime()) {
+          const diffDays = Math.ceil((new Date().getTime() - new Date(activeTx[0].due_date).getTime()) / (1000 * 3600 * 24));
+          if (diffDays > 0) fine = diffDays * 1000;
+        }
+
+        await db.execute(
+          "UPDATE transactions SET type = 'KEMBALI', status = 'SELESAI', return_date = NOW(), fine_amount = ? WHERE id = ?",
+          [fine, activeTx[0].id]
+        );
+        await db.execute("UPDATE books SET available_copies = available_copies + 1 WHERE id = ?", [book_id]);
+        
+        transactionVersion++;
+        res.json({ message: "Transaction successful", fine });
+      }
+    } catch (err) {
+      res.status(500).json({ error: "Transaction failed" });
+    }
+  });
+
+  // Admin Login
+
+
+  // Login Endpoint (Admin)
+  app.post("/api/login", async (req, res) => {
+    const { username, password } = req.body;
+    
+    // Demo Fallback Login
+    if (!db) {
+      if (username === 'admin' && password === 'admin123') {
+        return res.json({ 
+          success: true, 
+          user: { username: 'admin', role: 'ADMIN' },
+          remoteUrl: process.env.APP_URL || "http://localhost:3000"
+        });
+      }
+      return res.status(401).json({ error: "Invalid demo credentials" });
+    }
+
+    try {
+      const [rows]: any = await db.execute("SELECT * FROM users WHERE role = 'ADMIN' AND username = ?", [username]);
+      if (rows.length > 0) {
+        const user = rows[0];
+        const dbPassword = user.password || user.password_hash;
+        
+        // Use bcrypt to compare password
+        const isMatch = await bcrypt.compare(password, dbPassword);
+        
+        if (isMatch) {
+          return res.json({ 
+            success: true, 
+            user: { username: user.username, role: user.role || 'ADMIN' },
+            remoteUrl: process.env.APP_URL || "http://localhost:3000"
+          });
+        }
+      }
+      res.status(401).json({ error: "Invalid credentials" });
+    } catch (err) {
+      console.error("Login Error:", err);
+      res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  // Transactions Version Endpoint for Polling
+  app.get("/api/transactions/version", (req, res) => {
+    res.json({ version: transactionVersion });
+  });
+
+  // Analytics
+  app.get("/api/stats", async (req, res) => {
+    if (!db) {
+      return res.json({
+        totalBooks: mockBooks.reduce((acc, b) => acc + b.total_copies, 0),
+        borrowedBooks: mockTransactions.filter(t => t.status === 'BERJALAN').length,
+        activeMembers: mockMembers.length
+      });
+    }
+    try {
