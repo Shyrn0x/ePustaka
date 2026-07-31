@@ -919,7 +919,7 @@ function LoginView({ onLogin, onKatalog }: { onLogin: (data: any) => void, onKat
             <label className="block text-sm font-semibold text-gray-700 mb-1">Username / Scan RFID</label>
             <input 
               type="text" 
-              placeholder="admin"
+              placeholder="Username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
