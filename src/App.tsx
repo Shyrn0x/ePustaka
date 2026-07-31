@@ -1207,7 +1207,7 @@ function BookManagementView() {
             </div>
             <div>
               <label className="text-[10px] font-bold text-gray-400 uppercase">ISBN</label>
-              <input required type="text" placeholder="ISBN" value={formData.isbn} onChange={e => setFormData({...formData, isbn: e.target.value})} className="w-full px-4 py-2 rounded-xl border outline-none focus:ring-1 focus:ring-indigo-400 mt-1" />
+              <input required type="text" placeholder="ISBN" value={formData.isbn} onChange={e => setFormData({...formData, isbn: e.target.value.replace(/\D/g, '')})} className="w-full px-4 py-2 rounded-xl border outline-none focus:ring-1 focus:ring-indigo-400 mt-1" />
             </div>
             <div>
               <label className="text-[10px] font-bold text-gray-400 uppercase">Kategori</label>
@@ -1516,7 +1516,7 @@ function MemberManagementView() {
           </div>
           <div>
             <label className="block text-xs font-black text-gray-400 mb-2 uppercase">Nomor Induk (ID)</label>
-            <input required type="text" placeholder="Contoh: 3.33.xx.x" value={formData.student_id} onChange={e => setFormData({...formData, student_id: e.target.value})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50" />
+            <input required type="text" placeholder="Contoh: 12345678" value={formData.student_id} onChange={e => setFormData({...formData, student_id: e.target.value.replace(/\D/g, '')})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50" />
           </div>
           <div>
             <label className="block text-xs font-black text-gray-400 mb-2 uppercase">Peran Anggota</label>
