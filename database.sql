@@ -48,10 +48,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 --
 
 INSERT IGNORE INTO `users` (`id`, `username`, `password`, `name`, `role`, `created_at`, `max_borrow_limit`) VALUES
-(1000, 'admin', '$2a$10$vI8aWBnW3fID.ZQ4/zo1G.q1lRps.9cGLcZEiGDMVr5yUP1KUOYTa', 'Administrator', 'ADMIN', '2026-05-14 10:35:50', 999);
-
-INSERT IGNORE INTO `users` (`id`, `rfid_uid`, `name`, `student_id`, `role`, `created_at`, `max_borrow_limit`) VALUES
-(1, 'user123', 'Zaidan Arrifqi', '3.33.23.1.24', 'SISWA', '2026-07-31 10:00:00', 5);
+(1, 'admin', '$2b$10$r4VuQ/m9swEUe415Js20be/KihO9ASEErdJx82JefpZJAg0jKQeTO', 'Administrator', 'ADMIN', '2026-05-14 10:35:50', 999);
 
 INSERT IGNORE INTO `books` (`id`, `qr_code`, `title`, `author`, `isbn`, `category`, `publisher`, `total_copies`, `available_copies`, `created_at`) VALUES
 (3, 'BK-749965NP', 'Membuat Kacang Lebih Enak', 'Karmila', 'ISBN 978-602-8266-83-3', 'Teknologi & Ilmu Terapan', 'Permata Equator Media', 1, 1, '2026-06-05 14:27:07'),
@@ -146,7 +143,4 @@ INSERT IGNORE INTO `books` (`id`, `qr_code`, `title`, `author`, `isbn`, `categor
 (103, 'BK-6272301N', 'Cahaya Cinta Pesantren', 'Ira Madan', 'ISBN 978-602-257-928-1', 'Fiksi', 'Tinta Medina', 1, 1, '2026-06-11 01:51:20'),
 (104, 'BK-721095PQ', 'Crenshaw: Sahabat Beda Dunia', 'Katherine Applegate', 'ISBN 978-602-61099-2-7', 'Fiksi', 'Mizan Fantasi', 1, 1, '2026-06-11 01:53:03'),
 (105, 'BK-931321A3', 'Buku Pintar dan ATLAS Indonesia Dunia', ' ', ' ', 'pengetahuan umum', 'Duamedia', 1, 1, '2026-06-12 01:52:58');
-
-INSERT IGNORE INTO `transactions` (`id`, `member_id`, `book_id`, `type`, `status`, `transaction_date`, `due_date`, `return_date`, `fine_amount`, `fine_status`) VALUES
-(1, 1, 3, 'PINJAM', 'SELESAI', '2026-07-20 08:00:00', '2026-07-27 08:00:00', '2026-07-25 08:00:00', 0, 'LUNAS');
 

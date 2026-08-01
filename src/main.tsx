@@ -30,7 +30,7 @@ Object.defineProperty(window, 'fetch', {
       };
       return originalFetch(resource, newConfig);
     }
-    return originalFetch(...args);
+    return originalFetch.apply(window, args as any);
   },
   configurable: true,
   writable: true
