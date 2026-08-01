@@ -1,69 +1,124 @@
-# Setup Otomatis Kiosk Raspberry Pi
+# Setup Otomatis Kiosk Raspberry Pi (Folder Baru)
 
-Jika aplikasi tidak berjalan otomatis saat dinyalakan, ikuti panduan pasti berikut ini.
+Jika Anda ingin menginstall ulang aplikasi ke dalam folder baru di Raspberry Pi agar bersih, ikuti panduan pasti berikut ini.
 
-### 1. Simpan Proses PM2 (PENTING)
-Dari log terminal Anda, PM2 sudah berhasil di-install ke system startup. Namun, Anda **wajib** menyimpan daftar proses saat ini agar PM2 tahu apa yang harus dijalankan saat boot.
+### 1. Download & Persiapan Folder Baru
+Buka terminal di Raspberry Pi Anda dan jalankan perintah berikut:
 
-Buka terminal dan jalankan:
 ```bash
-# Pastikan Anda berada di folder aplikasi (misal: ~/PustakaKioskV4)
-cd ~/PustakaKioskV4
+# Buka folder Documents atau folder root pilihan Anda
+cd ~
 
-# PENTING: Lakukan build aplikasi terlebih dahulu agar file server.cjs terbuat
+# Buat folder baru (misalnya KioskV5) dan masuk ke dalamnya
+mkdir KioskV5
+cd KioskV5
+
+# (Opsional) Download/clone kode aplikasi ke dalam folder ini
+# misal: git clone <url-repo-anda> .  ATAU  download file ZIP dan ekstrak disini
+```
+
+Pastikan semua file project (termasuk `server.ts`, `package.json`, dan `rfid_sender.py`) sudah berada di dalam folder `~/KioskV5` tersebut.
+
+### 2. Install Dependencies Aplikasi & Python
+Masih di terminal dalam folder aplikasi yang baru:
+
+```bash
+# Install package Node.js
+npm install
+
+# Build aplikasi agar siap untuk dijalankan
 npm run build
 
-# Setelah build selesai, jalankan aplikasi dan rfid:
+# Install library Python untuk RFID
+pip3 install mfrc522 RPi.GPIO requests --break-system-packages
+```
+*(Catatan: flag `--break-system-packages` mungkin diperlukan di Debian 12 / Bookworm terbaru, jangan khawatir, ini aman untuk lingkungan Raspberry Pi lokal).*
+
+### 3. Setup Database (Import file database.sql)
+Aplikasi ini memerlukan database MariaDB/MySQL. File struktur dan data awal sudah tersedia di file `database.sql`.
+
+Buka terminal dan jalankan perintah berikut secara berurutan:
+
+```bash
+# Pastikan Anda berada di folder aplikasi baru (misal: ~/KioskV5)
+cd ~/KioskV5
+
+# 1. Login ke MariaDB (kosongkan password jika defaultnya tanpa password, langsung tekan Enter)
+# Jika ditolak, gunakan: sudo mariadb -u root
+mariadb -u root -p
+
+# Di dalam prompt MariaDB (MariaDB [(none)]>), jalankan:
+CREATE DATABASE IF NOT EXISTS pustaka_kiosk;
+EXIT;
+
+# 2. Import file database.sql ke dalam database pustaka_kiosk
+mariadb -u root -p pustaka_kiosk < database.sql
+# (Atau gunakan: sudo mariadb -u root pustaka_kiosk < database.sql)
+
+# 3. Setup file .env
+# Copy template konfigurasi env
+cp .env.example .env
+
+# (Opsional) Edit file .env jika password database Anda bukan kosong
+nano .env
+```
+*(Pastikan di dalam file `.env`, isi dari `DB_USER` dan `DB_PASSWORD` sesuai dengan konfigurasi database Raspberry Pi Anda. Jika Anda baru menginstall MariaDB di Raspberry Pi, biasanya `DB_USER=root` dan `DB_PASSWORD=` (kosong)).*
+
+### 4. Setup PM2 (Agar Web Server & RFID Auto-run)
+PM2 bertugas menjalankan web server dan script python RFID di background secara otomatis saat booting.
+
+```bash
+# Pastikan Anda berada di folder aplikasi baru
+cd ~/KioskV5
+
+# Hapus proses PM2 yang lama (jika ada)
+pm2 delete epustaka || true
+pm2 delete rfid || true
+
+# Jalankan server web (Pastikan file dist/server.cjs sudah ada dari npm run build)
 pm2 start npm --name "epustaka" -- run start
+
+# Jalankan script RFID
 pm2 start python3 --name "rfid" -- rfid_sender.py
 
 # SIMPAN PROSES (Ini yang membuat aplikasi otomatis jalan)
 pm2 save
+
+# (Opsional) Pastikan pm2 sudah terdaftar di startup system
+pm2 startup
 ```
 
-### 2. Autostart Brave Browser (Cara Paling Ampuh untuk Labwc)
+### 5. Autostart Brave Browser (Kiosk Mode)
+Agar tampilan browser otomatis fullscreen (Kiosk Mode) saat Raspi menyala:
 
-Karena perintah langsung (inline) seringkali diabaikan oleh beberapa versi sistem operasi, cara paling 100% ampuh adalah membuat sebuah **script khusus** untuk menjalankan kiosk.
-
-Buka terminal dan jalankan perintah-perintah ini secara berurutan:
-
-**Langkah A: Hapus sisa percobaan sebelumnya (agar bersih)**
-```bash
-rm -f ~/.config/autostart/kiosk.desktop
-rm -f ~/.config/labwc/autostart
-```
-
-**Langkah B: Buat Script Launcher Kiosk**
+**Langkah A: Buat Script Launcher**
 ```bash
 nano ~/start_kiosk.sh
 ```
 Masukkan baris kode berikut ke dalam file tersebut:
 ```bash
 #!/bin/bash
-# Tunggu 10 detik agar PM2 dan WiFi terhubung
-sleep 10
+# Tunggu 15 detik agar PM2, Database dan WiFi siap
+sleep 15
 
 # Jalankan Brave di mode Kiosk (Wayland native)
 brave-browser http://localhost:3000 --kiosk --noerrdialogs --disable-infobars --no-first-run --enable-features=UseOzonePlatform --ozone-platform=wayland
 ```
 Simpan dengan **Ctrl+X**, tekan **Y**, lalu **Enter**.
 
-**Langkah C: Jadikan Script Bisa Dieksekusi**
+**Langkah B: Jadikan Script Bisa Dieksekusi**
 ```bash
 chmod +x ~/start_kiosk.sh
 ```
 
-**Langkah D: Daftarkan ke Autostart (Penting: Gunakan Path Lengkap)**
-
-Buka terminal dan hapus konfigurasi lama:
+**Langkah C: Daftarkan ke Autostart GUI**
+Hapus autostart labwc lama (jika ada) dan buat file `.desktop` baru:
 ```bash
 rm -f ~/.config/labwc/autostart
 mkdir -p ~/.config/autostart
 nano ~/.config/autostart/kiosk.desktop
 ```
-
-Lalu masukkan kode ini ke dalamnya (kita menggunakan file `.desktop` standar karena ini yang paling didukung secara resmi oleh Raspberry Pi OS untuk GUI Autostart):
-
+Masukkan kode berikut:
 ```ini
 [Desktop Entry]
 Type=Application
@@ -72,14 +127,11 @@ Exec=/home/admin/start_kiosk.sh
 Terminal=false
 X-GNOME-Autostart-enabled=true
 ```
-Simpan dengan **Ctrl+X**, tekan **Y**, lalu **Enter**.
+*(Catatan: Pastikan `Exec=` menunjuk ke lokasi yang benar. Jika username Anda bukan `admin`, ganti `/home/admin` menjadi `/home/username_anda`)*. Simpan dengan **Ctrl+X**, tekan **Y**, lalu **Enter**.
 
-### 3. Tes & Restart Raspberry Pi
-Sebelum restart, Anda bisa mengetesnya secara manual terlebih dahulu dengan menjalankan:
-```bash
-~/start_kiosk.sh
-```
-Jika browser berhasil terbuka fullscreen, silakan tutup kembali (Alt+F4 atau Ctrl+W), lalu lakukan restart total:
+### 6. Tes & Restart Raspberry Pi
+Sebelum restart, pastikan koneksi database di file `.env` (di dalam folder baru) sudah benar.
+Lalu lakukan restart total:
 ```bash
 sudo reboot
 ```

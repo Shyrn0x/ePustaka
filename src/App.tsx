@@ -117,6 +117,27 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        if (payload.exp * 1000 > Date.now()) {
+          setUser({ id: payload.id, username: payload.username, role: payload.role, name: payload.name });
+          if (payload.role === 'ADMIN') {
+            setView('DASHBOARD');
+          } else {
+            setView('HOME');
+          }
+        } else {
+          localStorage.removeItem('token');
+        }
+      } catch (e) {
+        localStorage.removeItem('token');
+      }
+    }
+  }, []);
+
+  useEffect(() => {
     const checkDb = async () => {
       try {
         const res = await fetch('/api/stats');
@@ -881,13 +902,23 @@ function LoginView({ onLogin, onKatalog }: { onLogin: (data: any) => void, onKat
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username: username.trim(), password })
       });
-      if (res.ok) {
-        const data = await res.json();
+      
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        throw new Error("Invalid response format");
+      }
+      
+      if (res.ok && data.success) {
+        if (data.token) {
+          localStorage.setItem('token', data.token);
+        }
         onLogin(data);
       } else {
-        setError("Username atau password salah!");
+        setError(data.error || "Username atau password salah!");
       }
     } catch (err) {
       setError("Gagal menghubungi server.");
@@ -1369,15 +1400,14 @@ function MemberManagementView() {
   const [search, setSearch] = useState("");
   const [filterMonth, setFilterMonth] = useState("");
   const [regStep, setRegStep] = useState<'IDLE' | 'SCANNING' | 'FORM'>('IDLE');
-  const [formData, setFormData] = useState<any>({ rfid_uid: '', name: '', student_id: '', role: 'SISWA', max_borrow_limit: 5 });
+  const [formData, setFormData] = useState<any>({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '' });
   const [scannedInput, setScannedInput] = useState("");
 
   const loadMembers = () => fetch('/api/members', { cache: 'no-cache' }).then(res => res.json()).then(setMembers);
   useEffect(() => { loadMembers(); }, []);
 
   const filteredMembers = members.filter(m => 
-    m.name.toLowerCase().includes(search.toLowerCase()) || 
-    m.student_id.toLowerCase().includes(search.toLowerCase()) ||
+    m.name.toLowerCase().includes(search.toLowerCase()) ||
     m.rfid_uid.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -1472,7 +1502,7 @@ function MemberManagementView() {
     if (res.ok) {
       setRegStep('IDLE');
       loadMembers();
-      setFormData({ rfid_uid: '', name: '', student_id: '', role: 'SISWA', max_borrow_limit: 5 });
+      setFormData({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '' });
     } else {
       const err = await res.json();
       setErrorMsg(err.error || "Gagal mendaftarkan anggota");
@@ -1488,9 +1518,10 @@ function MemberManagementView() {
       id: member.id,
       rfid_uid: member.rfid_uid || '',
       name: member.name || '',
-      student_id: member.student_id || '',
       role: member.role || 'SISWA',
-      max_borrow_limit: member.max_borrow_limit || 5
+      max_borrow_limit: member.max_borrow_limit || 5,
+      username: member.username || '',
+      password: '' // Kosongkan password saat edit
     });
     setRegStep('FORM');
   };
@@ -1514,7 +1545,7 @@ function MemberManagementView() {
           )}
           <button 
             onClick={() => {
-              setFormData({ rfid_uid: '', name: '', student_id: '', role: 'SISWA', max_borrow_limit: 5 });
+              setFormData({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '' });
               if (regStep === 'IDLE') {
                 setRegStep('SCANNING');
               } else {
@@ -1578,10 +1609,6 @@ function MemberManagementView() {
             <input required type="text" placeholder="Masukkan nama siswa" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50" />
           </div>
           <div>
-            <label className="block text-xs font-black text-gray-400 mb-2 uppercase">Nomor Induk (ID)</label>
-            <input required type="text" placeholder="Contoh: 12345678" value={formData.student_id} onChange={e => setFormData({...formData, student_id: e.target.value.replace(/\D/g, '')})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50" />
-          </div>
-          <div>
             <label className="block text-xs font-black text-gray-400 mb-2 uppercase">Peran Anggota</label>
             <select value={formData.role} onChange={e => setFormData({...formData, role: e.target.value})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 font-bold">
               <option value="SISWA">Siswa</option>
@@ -1591,6 +1618,14 @@ function MemberManagementView() {
           <div>
             <label className="block text-xs font-black text-gray-400 mb-2 uppercase">Maks Pinjam Buku</label>
             <input required type="number" min="1" value={formData.max_borrow_limit || ''} onChange={e => setFormData({...formData, max_borrow_limit: e.target.value === '' ? '' : parseInt(e.target.value)})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 font-bold" />
+          </div>
+          <div>
+            <label className="block text-xs font-black text-gray-400 mb-2 uppercase">Username (Opsional)</label>
+            <input type="text" placeholder="Masukkan username" value={formData.username || ''} onChange={e => setFormData({...formData, username: e.target.value})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50" />
+          </div>
+          <div>
+            <label className="block text-xs font-black text-gray-400 mb-2 uppercase">{formData.id ? 'Password Baru (Opsional)' : 'Password (Opsional)'}</label>
+            <input type="password" placeholder={formData.id ? "Kosongkan jika tidak diubah" : "Masukkan password"} value={formData.password || ''} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50" />
           </div>
           {errorMsg && <div className="md:col-span-2 text-red-500 font-bold text-sm bg-red-50 p-3 rounded-xl">{errorMsg}</div>}
           <div className="flex items-end md:col-span-2">
@@ -1608,7 +1643,6 @@ function MemberManagementView() {
             <tr>
               <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('rfid_uid')}>UID Kartu {sortConfigMembers?.key === 'rfid_uid' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
               <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('name')}>Nama Lengkap {sortConfigMembers?.key === 'name' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
-              <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('student_id')}>NISN {sortConfigMembers?.key === 'student_id' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
               <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('max_borrow_limit')}>Maks Pinjam {sortConfigMembers?.key === 'max_borrow_limit' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
               <th className="px-6 py-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => requestSortMembers('role')}>Status {sortConfigMembers?.key === 'role' ? (sortConfigMembers.direction === 'asc' ? '↑' : '↓') : '↕'}</th>
               <th className="px-6 py-4 text-right">Aksi</th>
@@ -1623,7 +1657,6 @@ function MemberManagementView() {
                 <td className="px-6 py-4">
                   <p className="font-black text-gray-800">{m.name}</p>
                 </td>
-                <td className="px-6 py-4 font-bold text-gray-500 tracking-tight">{m.student_id}</td>
                 <td className="px-6 py-4 font-bold text-indigo-600">{m.max_borrow_limit || 5} Buku</td>
                 <td className="px-6 py-4">
                   <span className={cn(
@@ -2099,7 +2132,7 @@ function UserProfileView({ user, onBack }: { user: any, onBack: () => void }) {
            </div>
            <div>
               <h3 className="text-xl font-bold text-gray-800">{user.name}</h3>
-              <p className="text-gray-500 font-medium">NISN: {user.student_id} • Status: {user.role}</p>
+              <p className="text-gray-500 font-medium">Status: {user.role}</p>
            </div>
          </div>
          <div className="flex flex-wrap gap-4">

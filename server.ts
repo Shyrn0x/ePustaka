@@ -111,7 +111,7 @@ async function startServer() {
 
   // --- Mock Data for Demo/Preview Mode ---
   let mockMembers = [
-    { id: 1, rfid_uid: "user123", name: "Zaidan Arrifqi", student_id: "3.33.23.1.24", role: "SISWA", max_borrow_limit: 5 }
+    { id: 1, rfid_uid: "user123", name: "Zaidan Arrifqi", student_id: null, role: "SISWA", max_borrow_limit: 5, username: "siswa", password: "123" }
   ];
   let mockBooks = [
     { id: 1, qr_code: "buku123", title: "Rancang Bangun IOT", author: "Dzaki Syafiq", isbn: "123-456", category: "Teknik", total_copies: 5, available_copies: 5 }
@@ -137,29 +137,40 @@ async function startServer() {
 
   // Add Member
   app.post("/api/members", requireAdmin, async (req, res) => {
-    const { rfid_uid, name, student_id, role, max_borrow_limit } = req.body;
+    const { rfid_uid, name, role, max_borrow_limit, username, password } = req.body;
     if (!db) {
-      if (mockMembers.some(m => m.rfid_uid === rfid_uid || m.student_id === student_id)) {
-        return res.status(400).json({ error: "RFID or Student ID already exists" });
+      if (mockMembers.some(m => m.rfid_uid === rfid_uid || (username && m.username === username))) {
+        return res.status(400).json({ error: "RFID or Username already exists" });
       }
-      const newMember = { id: mockMembers.length + 1, rfid_uid, name, student_id, role, max_borrow_limit: max_borrow_limit || 5 };
+      const newMember = { id: mockMembers.length + 1, rfid_uid, name, student_id: null, role, max_borrow_limit: max_borrow_limit || 5, username, password };
       mockMembers.push(newMember);
       return res.json({ message: "Member added (Demo Mode)" });
     }
     try {
-      const [existing]: any = await db.execute("SELECT id FROM users WHERE rfid_uid = ? OR student_id = ?", [rfid_uid, student_id]);
+      let query = "SELECT id FROM users WHERE rfid_uid = ?";
+      let params = [rfid_uid];
+      if (username) {
+         query += " OR username = ?";
+         params.push(username);
+      }
+      const [existing]: any = await db.execute(query, params);
       if (existing.length > 0) {
-        return res.status(400).json({ error: "RFID or Student ID sudah terdaftar!" });
+        return res.status(400).json({ error: "RFID or Username sudah terdaftar!" });
+      }
+      
+      let hashedPassword = null;
+      if (password) {
+        hashedPassword = await bcrypt.hash(password, 10);
       }
       
       await db.execute(
-        "INSERT INTO users (rfid_uid, name, student_id, role, max_borrow_limit) VALUES (?, ?, ?, ?, ?)",
-        [rfid_uid, name, student_id, role || 'SISWA', parseInt(req.body.max_borrow_limit) || 5]
+        "INSERT INTO users (rfid_uid, name, student_id, role, max_borrow_limit, username, password) VALUES (?, ?, NULL, ?, ?, ?, ?)",
+        [rfid_uid, name, role || 'SISWA', parseInt(req.body.max_borrow_limit) || 5, username || null, hashedPassword]
       );
       res.json({ message: "Member added successfully" });
     } catch (err: any) {
-      if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ error: "RFID or Student ID already exists" });
-      res.status(500).json({ error: "Failed to add member" });
+      if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ error: "RFID or Username already exists" });
+      res.status(500).json({ error: "Failed to add member: " + err.message });
     }
   });
 
@@ -295,17 +306,39 @@ async function startServer() {
   // Update Member
   app.put("/api/members/:id", requireAdmin, async (req, res) => {
     console.log("PUT /api/members/:id", req.params.id, req.body);
-    const { rfid_uid, name, student_id, role, max_borrow_limit } = req.body;
+    const { rfid_uid, name, role, max_borrow_limit, username, password } = req.body;
     if (!db) {
       const member = mockMembers.find(m => m.id.toString() === req.params.id);
-      if (member) Object.assign(member, { rfid_uid, name, student_id, role, max_borrow_limit: max_borrow_limit || 5 });
+      if (member) Object.assign(member, { rfid_uid, name, role, max_borrow_limit: max_borrow_limit || 5, username, password: password || member.password });
       return res.json({ message: "Member updated" });
     }
     try {
-      await db.execute(
-        "UPDATE users SET rfid_uid = ?, name = ?, student_id = ?, role = ?, max_borrow_limit = ? WHERE id = ?",
-        [rfid_uid, name, student_id, role, parseInt(req.body.max_borrow_limit) || 5, req.params.id]
-      );
+      let query = "SELECT id FROM users WHERE (rfid_uid = ?";
+      let params: any[] = [rfid_uid];
+      if (username) {
+         query += " OR username = ?";
+         params.push(username);
+      }
+      query += ") AND id != ?";
+      params.push(req.params.id);
+
+      const [existing]: any = await db.execute(query, params);
+      if (existing.length > 0) {
+        return res.status(400).json({ error: "RFID or Username sudah terdaftar di anggota lain!" });
+      }
+
+      if (password) {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        await db.execute(
+          "UPDATE users SET rfid_uid = ?, name = ?, student_id = NULL, role = ?, max_borrow_limit = ?, username = ?, password = ? WHERE id = ?",
+          [rfid_uid, name, role, parseInt(req.body.max_borrow_limit) || 5, username || null, hashedPassword, req.params.id]
+        );
+      } else {
+        await db.execute(
+          "UPDATE users SET rfid_uid = ?, name = ?, student_id = NULL, role = ?, max_borrow_limit = ?, username = ? WHERE id = ?",
+          [rfid_uid, name, role, parseInt(req.body.max_borrow_limit) || 5, username || null, req.params.id]
+        );
+      }
       res.json({ message: "Member updated" });
     } catch (err: any) {
       console.error(err);
@@ -589,7 +622,7 @@ async function startServer() {
           remoteUrl: process.env.APP_URL || "http://localhost:3000"
         });
       }
-      const demoUser = mockMembers.find(m => (m.student_id === username || m.username === username || m.rfid_uid === username) && (password === m.student_id || (username === m.rfid_uid && (!password || password === ''))));
+      const demoUser = mockMembers.find(m => (m.username === username || m.rfid_uid === username) && ((password === m.password) || (username === m.rfid_uid && (!password || password === ''))));
       if (demoUser) {
         const token = jwt.sign(demoUser, JWT_SECRET, { expiresIn: '12h' });
         return res.json({ 
@@ -599,39 +632,40 @@ async function startServer() {
           remoteUrl: process.env.APP_URL || "http://localhost:3000"
         });
       }
-      return res.status(401).json({ error: "Invalid demo credentials" });
+      return res.status(401).json({ error: "Username atau password anda salah!" });
     }
     
     try {
       const [rows]: any = await db.execute("SELECT * FROM users WHERE username = ? OR rfid_uid = ?", [username, username]);
       if (rows.length > 0) {
         const user = rows[0];
-        if (user.role === 'ADMIN') {
-          const dbPassword = user.password || user.password_hash;
-          const isMatch = await bcrypt.compare(password, dbPassword);
-          if (isMatch) {
-            const tokenUser = { id: user.id, username: user.username, role: user.role || 'ADMIN', name: user.name };
-            const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
-            return res.json({ 
-               success: true, 
-               user: tokenUser,
-               token,
-              remoteUrl: process.env.APP_URL || "http://localhost:3000"
-            });
+        const dbPassword = user.password || user.password_hash;
+        
+        let isMatch = false;
+        
+        // Cek login via password
+        if (dbPassword && password) {
+          try {
+            isMatch = await bcrypt.compare(password, dbPassword);
+          } catch(e) {}
+          if (!isMatch && dbPassword === password) {
+            isMatch = true; // Fallback jika password di db tidak di hash
           }
-        } else {
-          // For SISWA or GURU, password is by default their student_id if not set otherwise
-          // If login via RFID, password can be empty
-          if (password === user.student_id || (username === user.rfid_uid && (!password || password === ''))) {
-             const tokenUser = { id: user.id, username: user.student_id, role: user.role, name: user.name };
-             const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
-             return res.json({ 
-               success: true, 
-               user: tokenUser,
-               token,
-              remoteUrl: process.env.APP_URL || "http://localhost:3000"
-            });
-          }
+        }
+        // Login RFID (tanpa password atau password kosong)
+        else if (username === user.rfid_uid && (!password || password === '')) {
+          isMatch = true;
+        }
+        
+        if (isMatch) {
+          const tokenUser = { id: user.id, username: user.username || user.rfid_uid, role: user.role || 'SISWA', name: user.name };
+          const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
+          return res.json({ 
+             success: true, 
+             user: tokenUser,
+             token,
+            remoteUrl: process.env.APP_URL || "http://localhost:3000"
+          });
         }
       }
       res.status(401).json({ error: "Username/RFID atau Password salah" });
