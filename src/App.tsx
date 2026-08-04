@@ -935,7 +935,7 @@ function LoginView({ onLogin, onKatalog }: { onLogin: (data: any) => void, onKat
             <User size={48} />
           </div>
           <h2 className="text-3xl font-bold text-gray-800">Login ePustaka</h2>
-          <p className="text-gray-500">Gunakan Username / Scan RFID dan Password</p>
+          <p className="text-gray-500">Silahkan scan RFID atau masukan Username dan Password anda</p>
         </div>
 
         {error && (
@@ -997,7 +997,7 @@ function StaffDashboard({ onLogout, remoteUrl }: { onLogout: () => void, remoteU
   const [stats, setStats] = useState({ totalBooks: 0, borrowedBooks: 0, activeMembers: 0, totalFines: 0 });
 
   useEffect(() => {
-    fetch('/api/stats').then(res => res.json()).then(setStats);
+    fetch('/api/stats').then(res => res.json()).then(data => setStats(data && typeof data === 'object' ? data : stats)).catch(() => {});
   }, [activeTab]);
 
   const menuItems = [
@@ -1028,16 +1028,6 @@ function StaffDashboard({ onLogout, remoteUrl }: { onLogout: () => void, remoteU
               {item.label}
             </button>
           ))}
-        </div>
-
-        <div className="mt-auto">
-          <button 
-            onClick={onLogout}
-            className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-100 transition-all text-sm shadow-sm"
-          >
-            <RotateCcw size={18} />
-            Logout
-          </button>
         </div>
       </aside>
 
@@ -1123,7 +1113,7 @@ function BookManagementView() {
 
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 
-  const loadBooks = () => fetch('/api/books', { cache: 'no-cache' }).then(res => res.json()).then(setBooks);
+  const loadBooks = () => fetch('/api/books', { cache: 'no-cache' }).then(res => res.json()).then(data => Array.isArray(data) ? setBooks(data) : setBooks([])).catch(() => setBooks([]));
   useEffect(() => { loadBooks(); }, []);
 
   const filteredBooks = books.filter(b => 
@@ -1186,9 +1176,16 @@ function BookManagementView() {
     setFormData(prev => ({ ...prev, qr_code: id }));
   };
 
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const handleSubmit = async (e: any) => {
+
+  const handlePreSubmit = (e: any) => {
     e.preventDefault();
+    setShowSaveConfirm(true);
+  };
+
+  const executeSubmit = async () => {
+    setShowSaveConfirm(false);
     setErrorMsg("");
     const isEdit = !!formData.id;
     const res = await fetch(isEdit ? `/api/books/${formData.id}` : '/api/books', {
@@ -1249,6 +1246,7 @@ function BookManagementView() {
           </div>
           <button 
             onClick={() => {
+              setShowSaveConfirm(false);
               if (showAdd) {
                 setFormData({ qr_code: '', title: '', author: '', publisher: '', isbn: '', category: '', total_copies: 1 });
                 setShowAdd(false);
@@ -1277,8 +1275,40 @@ function BookManagementView() {
         </div>
       )}
 
+      {showSaveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in zoom-in-95 duration-200 border border-gray-100">
+            <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
+              <BookOpen size={24} />
+            </div>
+            <h3 className="text-lg font-bold text-gray-800 mb-1">
+              {formData.id ? 'Konfirmasi Simpan Perubahan' : 'Konfirmasi Simpan Buku'}
+            </h3>
+            <p className="text-gray-600 text-sm mb-6">
+              Apakah Anda yakin ingin menyimpan data buku <span className="font-bold text-indigo-600">"{formData.title || formData.qr_code}"</span>?
+            </p>
+            <div className="flex gap-3">
+              <button 
+                type="button" 
+                onClick={() => setShowSaveConfirm(false)} 
+                className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-xl text-sm transition-colors"
+              >
+                Batal
+              </button>
+              <button 
+                type="button" 
+                onClick={executeSubmit} 
+                className="flex-1 py-2.5 bg-[#6366f1] hover:bg-[#5558e6] text-white font-bold rounded-xl text-sm shadow-md shadow-indigo-100 transition-colors"
+              >
+                Ya, Simpan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showAdd && (
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8 animate-in fade-in duration-300">
+        <form onSubmit={handlePreSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8 animate-in fade-in duration-300">
            <div className="md:col-span-2 bg-gray-50 p-8 rounded-[2rem] grid grid-cols-1 md:grid-cols-2 gap-4 border border-gray-100 h-fit">
             <div className="md:col-span-2 flex items-end gap-2">
               <div className="flex-1">
@@ -1403,7 +1433,7 @@ function MemberManagementView() {
   const [formData, setFormData] = useState<any>({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '' });
   const [scannedInput, setScannedInput] = useState("");
 
-  const loadMembers = () => fetch('/api/members', { cache: 'no-cache' }).then(res => res.json()).then(setMembers);
+  const loadMembers = () => fetch('/api/members', { cache: 'no-cache' }).then(res => res.json()).then(data => Array.isArray(data) ? setMembers(data) : setMembers([])).catch(() => setMembers([]));
   useEffect(() => { loadMembers(); }, []);
 
   const filteredMembers = members.filter(m => 
@@ -1489,9 +1519,16 @@ function MemberManagementView() {
     return () => clearInterval(interval);
   }, [regStep, members]);
 
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const handleSubmit = async (e: any) => {
+
+  const handlePreSubmit = (e: any) => {
     e.preventDefault();
+    setShowSaveConfirm(true);
+  };
+
+  const executeSubmit = async () => {
+    setShowSaveConfirm(false);
     setErrorMsg("");
     const isEdit = !!formData.id;
     const res = await fetch(isEdit ? `/api/members/${formData.id}` : '/api/members', {
@@ -1545,6 +1582,7 @@ function MemberManagementView() {
           )}
           <button 
             onClick={() => {
+              setShowSaveConfirm(false);
               setFormData({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '' });
               if (regStep === 'IDLE') {
                 setRegStep('SCANNING');
@@ -1572,6 +1610,38 @@ function MemberManagementView() {
         </div>
       )}
 
+      {showSaveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in zoom-in-95 duration-200 border border-gray-100">
+            <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
+              <User size={24} />
+            </div>
+            <h3 className="text-lg font-bold text-gray-800 mb-1">
+              {formData.id ? 'Konfirmasi Simpan Perubahan' : 'Konfirmasi Simpan Anggota'}
+            </h3>
+            <p className="text-gray-600 text-sm mb-6">
+              Apakah Anda yakin ingin menyimpan data anggota <span className="font-bold text-indigo-600">"{formData.name}"</span>?
+            </p>
+            <div className="flex gap-3">
+              <button 
+                type="button" 
+                onClick={() => setShowSaveConfirm(false)} 
+                className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-xl text-sm transition-colors"
+              >
+                Batal
+              </button>
+              <button 
+                type="button" 
+                onClick={executeSubmit} 
+                className="flex-1 py-2.5 bg-[#6366f1] hover:bg-[#5558e6] text-white font-bold rounded-xl text-sm shadow-md shadow-indigo-100 transition-colors"
+              >
+                Ya, Simpan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {regStep === 'SCANNING' && (
         <div className="bg-indigo-50 border-2 border-dashed border-indigo-200 p-12 rounded-[2rem] text-center animate-in zoom-in duration-300">
           <div className="w-20 h-20 bg-indigo-500 text-white rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg animate-pulse">
@@ -1593,7 +1663,7 @@ function MemberManagementView() {
       )}
 
       {regStep === 'FORM' && (
-        <form onSubmit={handleSubmit} className="bg-white p-8 rounded-[2rem] border-2 border-indigo-100 shadow-xl shadow-indigo-100/20 grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-top-4 duration-500">
+        <form onSubmit={handlePreSubmit} className="bg-white p-8 rounded-[2rem] border-2 border-indigo-100 shadow-xl shadow-indigo-100/20 grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-top-4 duration-500">
           <div className="md:col-span-2 flex items-center gap-4 bg-indigo-50 p-4 rounded-2xl border border-indigo-100 mb-2">
             <div className="w-12 h-12 bg-indigo-500 text-white rounded-xl flex items-center justify-center shadow-md">
               <CheckCircle2 size={24} />
@@ -1698,7 +1768,7 @@ function FinesView() {
   const [editAmount, setEditAmount] = useState(0);
 
   const fetchData = () => {
-    fetch('/api/transactions').then(res => res.json()).then(setData);
+    fetch('/api/transactions').then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
   }
 
   const [txVersion, setTxVersion] = useState(0);
@@ -1830,7 +1900,7 @@ function ReportView() {
   const [filterMonth, setFilterMonth] = useState("");
 
   const fetchData = () => {
-    fetch('/api/transactions').then(res => res.json()).then(setData);
+    fetch('/api/transactions').then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
   }
 
   const [txVersion, setTxVersion] = useState(0);
@@ -1996,7 +2066,7 @@ function RecentActivity() {
   const [logs, setLogs] = useState([]);
 
   const fetchLogs = () => {
-    fetch('/api/transactions').then(res => res.json()).then(data => setLogs(data.slice(0, 5)));
+    fetch('/api/transactions').then(res => res.json()).then(data => Array.isArray(data) ? setLogs(data.slice(0, 5)) : setLogs([])).catch(() => setLogs([]));
   };
 
   const [txVersion, setTxVersion] = useState(0);
@@ -2048,7 +2118,7 @@ function VisitorStats() {
   const [data, setData] = useState([]);
 
   useEffect(() => {
-    fetch('/api/stats/visitors').then(res => res.json()).then(setData);
+    fetch('/api/stats/visitors').then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
   }, []);
 
   return (
@@ -2103,11 +2173,12 @@ function UserProfileView({ user, onBack }: { user: any, onBack: () => void }) {
     fetch(`/api/users/${user.id}/history`)
       .then(res => res.json())
       .then(data => {
-        setHistory(data);
+        setHistory(Array.isArray(data) ? data : []);
         setLoading(false);
       })
       .catch(err => {
         console.error(err);
+        setHistory([]);
         setLoading(false);
       });
   }, [user.id]);
