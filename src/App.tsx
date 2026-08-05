@@ -76,7 +76,7 @@ export default function App() {
   useEffect(() => {
     // Initial sync so stale scans don't show toast on refresh
     fetch('/api/rfid/latest')
-      .then(res => res.json())
+      .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
       .then(data => {
         if (data && data.scanId) setGlobalScanId(data.scanId);
       })
@@ -84,7 +84,7 @@ export default function App() {
 
     const interval = setInterval(() => {
       fetch('/api/rfid/latest')
-        .then(res => res.json())
+        .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
         .then(data => {
           if (data && data.uid && data.scanId) {
             setGlobalScanId(prevId => {
@@ -367,10 +367,10 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
 
   useEffect(() => {
     if (step === 2) {
-      fetch(`/api/books?_t=${Date.now()}`, { cache: 'no-store' }).then(res => res.json()).then(setKatalogBooks).catch(() => {});
+      fetch(`/api/books?_t=${Date.now()}`, { cache: 'no-store' }).then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); }).then(setKatalogBooks).catch(() => {});
       if (type === 'KEMBALI' && !activeLoansFetched && member) {
         setActiveLoansFetched(true);
-        fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' }).then(res => res.json()).then(txs => {
+        fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' }).then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); }).then(txs => {
           const userTx = (Array.isArray(txs) ? txs : []).filter(t => Number(t.member_id) === Number(member.id) && (t.status === 'BERJALAN' || t.status === 'TERLAMBAT'));
           setActiveLoans(userTx);
         }).catch(() => {});
@@ -404,7 +404,14 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
     try {
       const res = await fetch(`/api/books/${input}?_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
-        const bookData = await res.json();
+        let bookData;
+      const ct = res.headers.get('content-type');
+      if (ct && ct.includes('application/json')) {
+        bookData = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50));
+      }
         
         // Double check availability
         if (type === 'PINJAM' && bookData.available_copies <= 0) {
@@ -471,7 +478,14 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
             type: type
           })
         });
-        const resData = await res.json();
+        let resData;
+      const ct = res.headers.get('content-type');
+      if (ct && ct.includes('application/json')) {
+        resData = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50));
+      }
         if(!res.ok) {
            throw new Error(resData.error || `Gagal: ${b.title}`);
         }
@@ -516,7 +530,14 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
     try {
       const res = await fetch(`/api/members/${input}`, { cache: 'no-store' });
       if (res.ok) {
-        const data = await res.json();
+        let data;
+      const ct = res.headers.get('content-type');
+      if (ct && ct.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50));
+      }
         setMember(data);
         setStep(2);
         setStatus('idle');
@@ -675,9 +696,14 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
                   <div className="flex items-center justify-between border-b border-gray-100 pb-2 mb-2">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Detail Transaksi</span>
                   </div>
-                  <div className="mb-3">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Peminjam</p>
-                    <p className="text-sm font-bold text-gray-800 truncate mt-0.5">{member.name}</p>
+                  <div className="mb-3 flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-100 flex items-center justify-center shrink-0 border border-gray-200 shadow-sm">
+                      {member.photo_url ? <img src={member.photo_url} alt={member.name} className="w-full h-full object-cover" /> : <User size={24} className="text-gray-400" />}
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Peminjam</p>
+                      <p className="text-sm font-bold text-gray-800 truncate mt-0.5">{member.name}</p>
+                    </div>
                   </div>
                   <div>
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Buku ({scannedBooks.length})</p>
@@ -716,11 +742,11 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
         ) : (
           <div className="w-full flex-1 flex flex-col justify-center items-center py-4">
             {member && step === 2 && (
-              <div className="flex items-center gap-2 mb-2 bg-indigo-50/50 py-1.5 px-3 rounded-full border border-indigo-100 w-fit mx-auto">
-                <div className="w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 shrink-0">
-                  <User size={12} />
+              <div className="flex items-center gap-3 mb-4 bg-white shadow-sm py-2 px-4 rounded-full border border-indigo-100 w-fit mx-auto">
+                <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 shrink-0 overflow-hidden ring-2 ring-indigo-50">
+                  {member.photo_url ? <img src={member.photo_url} alt="Profile" className="w-full h-full object-cover" /> : <User size={20} />}
                 </div>
-                <p className="text-xs font-bold text-gray-800">{member.name}</p>
+                <p className="text-sm font-black text-gray-800 pr-2">{member.name}</p>
               </div>
             )}
 
@@ -841,7 +867,14 @@ function KatalogView({ onBack }: { onBack: () => void }) {
       setLoading(true);
       try {
         const res = await fetch(`/api/books?search=${encodeURIComponent(search)}`, { cache: "no-store" });
-        const data = await res.json();
+        let data;
+      const ct = res.headers.get('content-type');
+      if (ct && ct.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50));
+      }
         setBooks(Array.isArray(data) ? data : []);
       } catch (err) {
         setBooks([]);
@@ -970,7 +1003,7 @@ function LoginView({ onLogin, onKatalog }: { onLogin: (data: any) => void, onKat
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username: uid, password: '' })
         })
-        .then(res => res.json())
+        .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
         .then(resData => {
           if (resData.success) {
             if (resData.token) localStorage.setItem('token', resData.token);
@@ -1090,13 +1123,13 @@ function StaffDashboard({ onLogout, remoteUrl }: { onLogout: () => void, remoteU
   const [stats, setStats] = useState({ totalBooks: 0, borrowedBooks: 0, activeMembers: 0, totalFines: 0 });
 
   useEffect(() => {
-    const fetchStats = () => fetch('/api/stats', { cache: 'no-store' }).then(res => res.json()).then(data => setStats(data && typeof data === 'object' ? data : stats)).catch(() => {});
+    const fetchStats = () => fetch('/api/stats', { cache: 'no-store' }).then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); }).then(data => setStats(data && typeof data === 'object' ? data : stats)).catch(() => {});
     fetchStats();
     let localTxVersion = 0;
     const interval = setInterval(() => {
       if (activeTab !== 'OVERVIEW') return;
       fetch('/api/transactions/version')
-        .then(res => res.json())
+        .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
         .then(data => {
           if (data && data.version !== localTxVersion) {
             localTxVersion = data.version;
@@ -1221,7 +1254,7 @@ function BookManagementView() {
 
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 
-  const loadBooks = () => fetch(`/api/books?_t=${Date.now()}`, { cache: 'no-cache' }).then(res => res.json()).then(data => Array.isArray(data) ? setBooks(data) : setBooks([])).catch(() => setBooks([]));
+  const loadBooks = () => fetch(`/api/books?_t=${Date.now()}`, { cache: 'no-cache' }).then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); }).then(data => Array.isArray(data) ? setBooks(data) : setBooks([])).catch(() => setBooks([]));
   useEffect(() => { loadBooks(); }, []);
 
   const filteredBooks = books.filter(b => 
@@ -1287,7 +1320,7 @@ function BookManagementView() {
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const handlePreSubmit = (e: any) => {
+    const handlePreSubmit = (e: any) => {
     e.preventDefault();
     setShowSaveConfirm(true);
   };
@@ -1306,7 +1339,14 @@ function BookManagementView() {
       setShowAdd(false);
       setFormData({ qr_code: '', title: '', author: '', publisher: '', isbn: '', category: '', total_copies: 1 });
     } else {
-      const err = await res.json();
+      let err;
+      const ct = res.headers.get('content-type');
+      if (ct && ct.includes('application/json')) {
+        err = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50));
+      }
       setErrorMsg(err.error || "Gagal menyimpan buku");
     }
   };
@@ -1538,10 +1578,10 @@ function MemberManagementView() {
   const [search, setSearch] = useState("");
   const [filterMonth, setFilterMonth] = useState("");
   const [regStep, setRegStep] = useState<'IDLE' | 'SCANNING' | 'FORM'>('IDLE');
-  const [formData, setFormData] = useState<any>({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '' });
+  const [formData, setFormData] = useState<any>({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '', photo_url: '' });
   const [scannedInput, setScannedInput] = useState("");
 
-  const loadMembers = () => fetch('/api/members', { cache: 'no-cache' }).then(res => res.json()).then(data => Array.isArray(data) ? setMembers(data) : setMembers([])).catch(() => setMembers([]));
+  const loadMembers = () => fetch('/api/members', { cache: 'no-cache' }).then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); }).then(data => Array.isArray(data) ? setMembers(data) : setMembers([])).catch(() => setMembers([]));
   useEffect(() => { loadMembers(); }, []);
 
   const filteredMembers = members.filter(m => 
@@ -1628,6 +1668,47 @@ function MemberManagementView() {
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
+  const handlePhotoUpload = (e: any) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 400;
+          const MAX_HEIGHT = 400;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if(ctx){
+            ctx.drawImage(img, 0, 0, width, height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            setFormData((prev: any) => ({ ...prev, photo_url: dataUrl }));
+          } else {
+            setFormData((prev: any) => ({ ...prev, photo_url: reader.result }));
+          }
+        };
+        img.src = reader.result as string;
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const handlePreSubmit = (e: any) => {
     e.preventDefault();
     setShowSaveConfirm(true);
@@ -1645,10 +1726,17 @@ function MemberManagementView() {
     if (res.ok) {
       setRegStep('IDLE');
       loadMembers();
-      setFormData({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '' });
+      setFormData({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '', photo_url: '' });
     } else {
-      const err = await res.json();
-      setErrorMsg(err.error || "Gagal mendaftarkan anggota");
+      let errMsg = "Gagal menyimpan anggota (koneksi atau server error)";
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const err = await res.json();
+        errMsg = err.error || errMsg;
+      } else if (res.status === 413) {
+        errMsg = "Ukuran file terlalu besar!";
+      }
+      setErrorMsg(errMsg);
     }
   };
 
@@ -1664,7 +1752,8 @@ function MemberManagementView() {
       role: member.role || 'SISWA',
       max_borrow_limit: member.max_borrow_limit || 5,
       username: member.username || '',
-      password: '' // Kosongkan password saat edit
+      password: '', // Kosongkan password saat edit
+      photo_url: member.photo_url || ''
     });
     setRegStep('FORM');
   };
@@ -1689,7 +1778,7 @@ function MemberManagementView() {
           <button 
             onClick={() => {
               setShowSaveConfirm(false);
-              setFormData({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '' });
+              setFormData({ rfid_uid: '', name: '', role: 'SISWA', max_borrow_limit: 5, username: '', password: '', photo_url: '' });
               if (regStep === 'IDLE') {
                 setRegStep('SCANNING');
               } else {
@@ -1796,6 +1885,15 @@ function MemberManagementView() {
             <input required type="number" min="1" value={formData.max_borrow_limit || ''} onChange={e => setFormData({...formData, max_borrow_limit: e.target.value === '' ? '' : parseInt(e.target.value)})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 font-bold" />
           </div>
           <div>
+            <label className="block text-xs font-black text-gray-400 mb-2 uppercase">Foto Pengguna (Opsional)</label>
+            <div className="flex items-center gap-4 bg-gray-50 p-3 rounded-2xl">
+              <div className="w-12 h-12 rounded-full overflow-hidden shrink-0 border-2 border-indigo-100 flex items-center justify-center bg-gray-200">
+                {formData.photo_url ? <img src={formData.photo_url} alt="Preview" className="w-full h-full object-cover" /> : <User size={20} className="text-gray-400" />}
+              </div>
+              <input type="file" accept="image/*" onChange={handlePhotoUpload} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 outline-none cursor-pointer" />
+            </div>
+          </div>
+          <div>
             <label className="block text-xs font-black text-gray-400 mb-2 uppercase">Username (Opsional)</label>
             <input type="text" placeholder="Masukkan username" value={formData.username || ''} onChange={e => setFormData({...formData, username: e.target.value})} className="w-full px-5 py-4 rounded-2xl border-none outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50" />
           </div>
@@ -1874,7 +1972,7 @@ function FinesView() {
   const [editAmount, setEditAmount] = useState(0);
 
   const fetchData = () => {
-    fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' }).then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
+    fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' }).then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); }).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
   }
 
   const [txVersion, setTxVersion] = useState(0);
@@ -1883,7 +1981,7 @@ function FinesView() {
     fetchData();
     const interval = setInterval(() => {
       fetch('/api/transactions/version')
-        .then(res => res.json())
+        .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
         .then(data => {
           if (data && data.version !== txVersion) {
             setTxVersion(data.version);
@@ -2023,7 +2121,7 @@ function ReportView() {
   const [filterMonth, setFilterMonth] = useState("");
 
   const fetchData = () => {
-    fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' }).then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
+    fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' }).then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); }).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
   }
 
   const [txVersion, setTxVersion] = useState(0);
@@ -2032,7 +2130,7 @@ function ReportView() {
     fetchData();
     const interval = setInterval(() => {
       fetch('/api/transactions/version')
-        .then(res => res.json())
+        .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
         .then(data => {
           if (data && data.version !== txVersion) {
             setTxVersion(data.version);
@@ -2190,7 +2288,7 @@ function RecentActivity() {
 
   const fetchLogs = () => {
     fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' })
-      .then(res => res.json())
+      .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
       .then(data => {
         if (!Array.isArray(data)) return setLogs([]);
         let events: any[] = [];
@@ -2212,7 +2310,7 @@ function RecentActivity() {
     fetchLogs();
     const interval = setInterval(() => {
       fetch('/api/transactions/version')
-        .then(res => res.json())
+        .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
         .then(data => {
           if (data && data.version !== txVersion) {
             setTxVersion(data.version);
@@ -2256,7 +2354,7 @@ function VisitorStats() {
   
   const fetchStats = () => {
     fetch('/api/stats/visitors', { cache: 'no-store' })
-      .then(res => res.json())
+      .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
       .then(data => Array.isArray(data) ? setData(data as never[]) : setData([]))
       .catch(() => setData([]));
   };
@@ -2267,7 +2365,7 @@ function VisitorStats() {
     fetchStats();
     const interval = setInterval(() => {
       fetch('/api/transactions/version')
-        .then(res => res.json())
+        .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
         .then(data => {
           if (data && data.version !== txVersion) {
             setTxVersion(data.version);
@@ -2329,7 +2427,7 @@ function UserProfileView({ user, onBack }: { user: any, onBack: () => void }) {
 
   useEffect(() => {
     fetch(`/api/users/${user.id}/history`)
-      .then(res => res.json())
+      .then(async res => { const contentType = res.headers.get('content-type'); if (contentType && contentType.includes('application/json')) return res.json(); const text = await res.text(); throw new Error('Not JSON: ' + res.status + ' ' + text.slice(0, 50)); })
       .then(data => {
         setHistory(Array.isArray(data) ? data : []);
         setLoading(false);
@@ -2356,8 +2454,8 @@ function UserProfileView({ user, onBack }: { user: any, onBack: () => void }) {
       
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
          <div className="flex items-center gap-6">
-           <div className="w-16 h-16 bg-[#8b5cf6]/10 text-[#8b5cf6] rounded-full flex items-center justify-center shrink-0">
-              <User size={32} />
+           <div className="w-20 h-20 bg-[#8b5cf6]/10 text-[#8b5cf6] rounded-full flex items-center justify-center shrink-0 overflow-hidden shadow-md ring-4 ring-indigo-50">
+              {user.photo_url ? <img src={user.photo_url} alt="Profile" className="w-full h-full object-cover" /> : <User size={36} />}
            </div>
            <div>
               <h3 className="text-xl font-bold text-gray-800">{user.name}</h3>

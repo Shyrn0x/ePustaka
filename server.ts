@@ -45,7 +45,8 @@
       const app = express();
 
       app.use(cors());
-      app.use(express.json());
+      app.use(express.json({ limit: '50mb' }));
+      app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
       app.use((req, res, next) => {
         if (req.url !== '/api/rfid/latest') {
@@ -67,6 +68,7 @@
           connectionLimit: 10,
           queueLimit: 0
         });
+        await db.execute("UPDATE users SET photo_url = NULL WHERE LENGTH(photo_url) > 1000000").catch(() => {});
         // Test the connection
         await db.query("SELECT 1");
         console.log("Connected to MySQL database pool");
@@ -99,6 +101,10 @@
         try {
           await db.execute("ALTER TABLE transactions ADD COLUMN fine_modified BOOLEAN DEFAULT FALSE");
         } catch(e: any) { /* ignore if exists */ }
+        
+        try {
+          await db.execute("ALTER TABLE users ADD COLUMN photo_url LONGTEXT");
+        } catch(e: any) { /* ignore if exists */ }
 
 
       } catch (err) {
@@ -110,7 +116,7 @@
       let mockMembers: any[] = [
         { id: 1, username: 'admin', password: 'admin123', name: 'Administrator', role: 'ADMIN', max_borrow_limit: 999 },
         { id: 2, rfid_uid: 'dummy123', name: 'Budi Santoso (Test User)', student_id: '12345678', role: 'SISWA', max_borrow_limit: 5, username: 'budi', password: '123', created_at: '2026-07-01' },
-        { id: 3, rfid_uid: '38192011', name: 'Siti Aminah', student_id: '87654321', role: 'SISWA', max_borrow_limit: 5, username: 'siti', password: '123', created_at: '2026-07-05' },
+        { id: 3, rfid_uid: '38192011', name: 'Siti Aminah', student_id: '87654321', role: 'SISWA', max_borrow_limit: 5, username: 'siti', password: '123', created_at: '2026-07-05', photo_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Siti' },
         { id: 4, rfid_uid: '99201822', name: 'Ahmad Yani, S.Pd.', student_id: '19850101', role: 'GURU', max_borrow_limit: 10, username: 'ahmadyani', password: '123', created_at: '2026-07-10' },
         { id: 5, rfid_uid: '55412903', name: 'Dewa Ruci', student_id: '12345679', role: 'SISWA', max_borrow_limit: 5, username: 'dewaruci', password: '123', created_at: '2026-07-15' }
       ];
@@ -1162,13 +1168,13 @@
 
       // Create member
       app.post("/api/members", async (req, res) => {
-        const { rfid_uid, name, role, max_borrow_limit, username, password } = req.body;
+        const { rfid_uid, name, role, max_borrow_limit, username, password, photo_url } = req.body;
         try {
           if (db) {
             const hash = password ? await bcrypt.hash(password, 10) : null;
             await db.execute(
-              "INSERT INTO users (rfid_uid, name, role, max_borrow_limit, username, password) VALUES (?, ?, ?, ?, ?, ?)",
-              [rfid_uid || null, name, role || 'SISWA', max_borrow_limit || 5, username || null, hash]
+              "INSERT INTO users (rfid_uid, name, role, max_borrow_limit, username, password, photo_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              [rfid_uid || null, name, role || 'SISWA', max_borrow_limit || 5, username || null, hash, photo_url || null]
             );
             return res.json({ message: "Member created" });
           }
@@ -1191,19 +1197,19 @@
 
       // Update member
       app.put("/api/members/:id", async (req, res) => {
-        const { rfid_uid, name, role, max_borrow_limit, username, password } = req.body;
+        const { rfid_uid, name, role, max_borrow_limit, username, password, photo_url } = req.body;
         try {
           if (db) {
             const hash = password ? await bcrypt.hash(password, 10) : null;
             if (password) {
               await db.execute(
-                "UPDATE users SET rfid_uid = ?, name = ?, role = ?, max_borrow_limit = ?, username = ?, password = ? WHERE id = ?",
-                [rfid_uid || null, name, role || 'SISWA', max_borrow_limit || 5, username || null, hash, req.params.id]
+                "UPDATE users SET rfid_uid = ?, name = ?, role = ?, max_borrow_limit = ?, username = ?, password = ?, photo_url = ? WHERE id = ?",
+                [rfid_uid || null, name, role || 'SISWA', max_borrow_limit || 5, username || null, hash, photo_url || null, req.params.id]
               );
             } else {
               await db.execute(
-                "UPDATE users SET rfid_uid = ?, name = ?, role = ?, max_borrow_limit = ?, username = ? WHERE id = ?",
-                [rfid_uid || null, name, role || 'SISWA', max_borrow_limit || 5, username || null, req.params.id]
+                "UPDATE users SET rfid_uid = ?, name = ?, role = ?, max_borrow_limit = ?, username = ?, photo_url = ? WHERE id = ?",
+                [rfid_uid || null, name, role || 'SISWA', max_borrow_limit || 5, username || null, photo_url || null, req.params.id]
               );
             }
             return res.json({ message: "Member updated" });
@@ -1220,6 +1226,7 @@
             role: role || mockMembers[idx].role,
             max_borrow_limit: Number(max_borrow_limit) || mockMembers[idx].max_borrow_limit,
             username: username !== undefined ? username : mockMembers[idx].username,
+            photo_url: photo_url !== undefined ? photo_url : mockMembers[idx].photo_url,
             ...(password ? { password } : {})
           };
         }
@@ -1401,7 +1408,7 @@
                 AND (fine_status IS NULL OR fine_status != 'LUNAS') AND fine_modified = FALSE
             `);
             const [rows]: any = await db.execute(`
-              SELECT t.*, u.name as member_name, b.title as book_title, u.rfid_uid, b.qr_code 
+              SELECT t.*, u.name as member_name, b.title as book_title, u.rfid_uid, b.qr_code, u.photo_url as member_photo_url 
               FROM transactions t 
               JOIN users u ON t.member_id = u.id 
               JOIN books b ON t.book_id = b.id 
@@ -1672,7 +1679,7 @@
                 if (isMatch) {
                   const tokenUser = { id: user.id, username: user.username || user.rfid_uid || 'admin', role: 'ADMIN', name: user.name || 'Administrator' };
                   const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
-                  return res.json({ success: true, user: tokenUser, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
+                  return res.json({ success: true, user: { ...tokenUser, photo_url: user.photo_url }, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
                 }
                 return res.status(401).json({ error: "Password Admin salah!" });
               }
@@ -1697,7 +1704,7 @@
               if (isMatch) {
                 const tokenUser = { id: user.id, username: user.username || user.rfid_uid, role: user.role || 'SISWA', name: user.name };
                 const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
-                return res.json({ success: true, user: tokenUser, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
+                return res.json({ success: true, user: { ...tokenUser, photo_url: user.photo_url || null }, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
               }
             }
           }
@@ -1723,7 +1730,7 @@
             if (cleanPassword === user.password || cleanPassword === 'admin123' || cleanPassword === 'admin') {
               const tokenUser = { id: user.id, username: user.username || 'admin', role: 'ADMIN', name: user.name };
               const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
-              return res.json({ success: true, user: tokenUser, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
+              return res.json({ success: true, user: { ...tokenUser, photo_url: user.photo_url || null }, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
             }
             return res.status(401).json({ error: "Password Admin salah!" });
           }
@@ -1732,7 +1739,7 @@
           if (isRfidMatch || !cleanPassword || cleanPassword === user.password || cleanPassword === '123') {
             const tokenUser = { id: user.id, username: user.username || user.rfid_uid, role: user.role || 'SISWA', name: user.name };
             const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
-            return res.json({ success: true, user: tokenUser, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
+            return res.json({ success: true, user: { ...tokenUser, photo_url: user.photo_url || null }, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
           }
         }
 
@@ -1743,7 +1750,7 @@
           if (cleanPassword === 'admin123' || cleanPassword === 'admin') {
             const tokenUser = { id: 1, username: 'admin', role: 'ADMIN', name: 'Administrator' };
             const token = jwt.sign(tokenUser, JWT_SECRET, { expiresIn: '12h' });
-            return res.json({ success: true, user: tokenUser, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
+            return res.json({ success: true, user: { ...tokenUser, photo_url: user.photo_url || null }, token, remoteUrl: process.env.APP_URL || "http://localhost:3000" });
           }
         }
 
@@ -1771,8 +1778,9 @@
                 AND (fine_status IS NULL OR fine_status != 'LUNAS') AND fine_modified = FALSE
             `);
             const [rows]: any = await db.execute(`
-              SELECT t.*, b.title as book_title, b.qr_code
+              SELECT t.*, b.title as book_title, b.qr_code, u.photo_url as member_photo_url
               FROM transactions t
+              JOIN users u ON t.member_id = u.id
               JOIN books b ON t.book_id = b.id
               WHERE t.member_id = ?
               ORDER BY t.transaction_date DESC
