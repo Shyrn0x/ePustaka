@@ -1,6 +1,31 @@
-# Setup Otomatis Kiosk Raspberry Pi (Folder Baru)
+# Setup Otomatis Kiosk Raspberry Pi & Panduan Masalah RFID
 
-Jika Anda ingin menginstall ulang aplikasi ke dalam folder baru di Raspberry Pi agar bersih, ikuti panduan pasti berikut ini.
+### 🔍 PERINGATAN PENTING: MENGAPA RFID BELUM TERBACA DI PI?
+
+Jika Anda mencoba mengirim UID dari terminal atau tap kartu di Pi tapi web tidak merespons, **penyebab utamanya adalah perbedaan URL Server**:
+
+1. **JIKA ANDA MEMBUKA WEBSITE DI CLOUD AI STUDIO / LAPTOP:**
+   - Script `rfid_sender.py` secara default mencoba mengirim ke `http://localhost:3000` di dalam Raspberry Pi.
+   - Karena server web Anda berada di Cloud AI Studio (URL `https://ais-dev-mg6oiintjeco64qhktk36w-81824229920.asia-southeast1.run.app`), maka `localhost:3000` di Pi **TIDAK ADA SERVER YANG MENDENGARKAN**!
+   - **SOLUSI KIRIM LANGSUNG DARI TERMINAL PI KE CLOUD:**
+     ```bash
+     python3 rfid_sender.py 38192011 https://ais-dev-mg6oiintjeco64qhktk36w-81824229920.asia-southeast1.run.app
+     ```
+   - **SOLUSI INTERAKTIF DI PI:**
+     Jalankan:
+     ```bash
+     sudo python3 rfid_sender.py
+     ```
+     Script akan otomatis mengecek koneksi, jika localhost gagal, script akan menyajikan menu untuk memilih URL Cloud AI Studio atau IP Laptop Anda!
+
+2. **JIKA WEBSITE BERJALAN LOKAL DI RASPBERRY PI LOKAL (PORT 3000):**
+   - Pastikan server node sudah jalan dengan `npm run start` atau `pm2 start npm --name "epustaka" -- run start`.
+   - Jalankan script RFID:
+     ```bash
+     sudo python3 rfid_sender.py 38192011 http://localhost:3000
+     ```
+
+---
 
 ### 1. Download & Persiapan Folder Baru
 Buka terminal di Raspberry Pi Anda dan jalankan perintah berikut:

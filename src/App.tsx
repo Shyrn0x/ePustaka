@@ -68,6 +68,55 @@ export default function App() {
   const [view, setView] = useState<ViewState>('LOGIN');
   const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'error'>('checking');
   const [remoteUrl, setRemoteUrl] = useState("");
+  
+  const [globalScanId, setGlobalScanId] = useState<number>(0);
+  const [rfidToast, setRfidToast] = useState<{ uid: string; memberName?: string } | null>(null);
+
+  // Global Single RFID Poller & Event Dispatcher
+  useEffect(() => {
+    // Initial sync so stale scans don't show toast on refresh
+    fetch('/api/rfid/latest')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.scanId) setGlobalScanId(data.scanId);
+      })
+      .catch(() => {});
+
+    const interval = setInterval(() => {
+      fetch('/api/rfid/latest')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.uid && data.scanId) {
+            setGlobalScanId(prevId => {
+              if (data.scanId > prevId && (Date.now() - (data.timestamp || 0) < 10000)) {
+                window.dispatchEvent(new CustomEvent('rfid_scanned', { detail: data }));
+                return data.scanId;
+              }
+              return prevId;
+            });
+          }
+        })
+        .catch(() => {});
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Listen for rfid_scanned for global notification toast
+  useEffect(() => {
+    const handleRfid = (e: CustomEvent) => {
+      const data = e.detail;
+      if (data && data.uid) {
+        setRfidToast({
+          uid: data.uid,
+          memberName: data.member?.name
+        });
+        setTimeout(() => setRfidToast(null), 5000);
+      }
+    };
+    window.addEventListener('rfid_scanned', handleRfid as EventListener);
+    return () => window.removeEventListener('rfid_scanned', handleRfid as EventListener);
+  }, []);
 
   const handleLoginSuccess = (data: any) => {
     if (data.token) {
@@ -117,24 +166,11 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        if (payload.exp * 1000 > Date.now()) {
-          setUser({ id: payload.id, username: payload.username, role: payload.role, name: payload.name });
-          if (payload.role === 'ADMIN') {
-            setView('DASHBOARD');
-          } else {
-            setView('HOME');
-          }
-        } else {
-          localStorage.removeItem('token');
-        }
-      } catch (e) {
-        localStorage.removeItem('token');
-      }
-    }
+    // Pada Kios / Kiosk Mode, jika halaman direload atau jaringan terputus, 
+    // sistem selalu kembali ke halaman LOGIN untuk keamanan kiosk dan tidak menyimpan sesi otomatis.
+    localStorage.removeItem('token');
+    setUser(null);
+    setView('LOGIN');
   }, []);
 
   useEffect(() => {
@@ -179,6 +215,15 @@ export default function App() {
   return (
     <div className="h-screen w-screen bg-[#6366f1] bg-gradient-to-br from-[#6366f1] via-[#8b5cf6] to-[#d946ef] p-2 md:p-4 lg:p-6 flex flex-col items-center justify-center font-sans overflow-hidden">
       <div className="w-full h-full max-w-7xl bg-white rounded-2xl md:rounded-3xl shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] overflow-hidden flex flex-col">
+        {rfidToast && (
+          <div className={`${rfidToast.memberName ? 'bg-emerald-600 border-emerald-500' : 'bg-red-600 border-red-500'} text-white px-6 py-2.5 flex items-center justify-between text-xs md:text-sm font-semibold shadow-lg border-b animate-pulse no-print z-50`}>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={18} className={rfidToast.memberName ? 'text-emerald-200' : 'text-red-200'} />
+              <span>Kartu RFID Terdeteksi: <code className={`${rfidToast.memberName ? 'bg-emerald-800/80' : 'bg-red-800/80'} px-2 py-0.5 rounded font-mono text-xs`}>{rfidToast.uid}</code> {rfidToast.memberName ? `— (${rfidToast.memberName})` : '— (Belum Terdaftar)'}</span>
+            </div>
+            <button onClick={() => setRfidToast(null)} className={`text-[10px] ${rfidToast.memberName ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-red-700 hover:bg-red-800'} px-2.5 py-1 rounded cursor-pointer transition-colors`}>Tutup</button>
+          </div>
+        )}
         {/* Header */}
         <header className="px-10 py-6 border-b border-gray-100 flex items-center justify-between no-print">
           <div 
@@ -322,13 +367,11 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
 
   useEffect(() => {
     if (step === 2) {
-      if (katalogBooks.length === 0) {
-        fetch('/api/books').then(res => res.json()).then(setKatalogBooks).catch(() => {});
-      }
+      fetch(`/api/books?_t=${Date.now()}`, { cache: 'no-store' }).then(res => res.json()).then(setKatalogBooks).catch(() => {});
       if (type === 'KEMBALI' && !activeLoansFetched && member) {
         setActiveLoansFetched(true);
-        fetch('/api/transactions').then(res => res.json()).then(txs => {
-          const userTx = (Array.isArray(txs) ? txs : []).filter(t => t.member_id === member.id && (t.status === 'BERJALAN' || t.status === 'TERLAMBAT'));
+        fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' }).then(res => res.json()).then(txs => {
+          const userTx = (Array.isArray(txs) ? txs : []).filter(t => Number(t.member_id) === Number(member.id) && (t.status === 'BERJALAN' || t.status === 'TERLAMBAT'));
           setActiveLoans(userTx);
         }).catch(() => {});
       }
@@ -340,8 +383,15 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
     if (scannedCodesRef.current.has(input)) return;
 
     if (type === 'PINJAM') {
-      const maxAllowed = member?.max_borrow_limit ?? 5;
-      const activeBorrows = member?.active_borrows ?? 0;
+      if (member?.has_unpaid_fine) {
+         setMessage("Anda memiliki denda yang belum dibayar. Harap lunasi terlebih dahulu sebelum meminjam buku.");
+         setStatus('error');
+         setTimeout(() => { setStatus('idle'); setMessage(''); }, 4000);
+         return;
+      }
+
+      const maxAllowed = Number(member?.max_borrow_limit ?? 5);
+      const activeBorrows = Number(member?.active_borrows ?? 0);
       if (scannedBooks.length + activeBorrows >= maxAllowed) {
          setMessage(`Maksimal meminjam ${maxAllowed} buku! (Sedang dipinjam: ${activeBorrows})`);
          setStatus('error');
@@ -352,7 +402,7 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
     
     setIsProcessing(true);
     try {
-      const res = await fetch(`/api/books/${input}`);
+      const res = await fetch(`/api/books/${input}?_t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const bookData = await res.json();
         
@@ -367,7 +417,18 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
 
         // Check if user actually borrowed this book when returning
         if (type === 'KEMBALI') {
-           const isBorrowed = activeLoans.some(t => t.book_id === bookData.id);
+           let isBorrowed = activeLoans.some(t => Number(t.book_id) === Number(bookData.id));
+           if (!isBorrowed) {
+              // Double check with API in case of race condition (fast scanner)
+              try {
+                const txRes = await fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' });
+                const txs = await txRes.json();
+                const userTx = (Array.isArray(txs) ? txs : []).filter(t => Number(t.member_id) === Number(member.id) && (t.status === 'BERJALAN' || t.status === 'TERLAMBAT'));
+                setActiveLoans(userTx);
+                isBorrowed = userTx.some(t => Number(t.book_id) === Number(bookData.id));
+              } catch(e) {}
+           }
+           
            if (!isBorrowed) {
               setMessage("Buku ini tidak sedang Anda pinjam.");
               setStatus('error');
@@ -444,13 +505,16 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
     let successMessage = type === 'PINJAM' ? `Berhasil meminjam ${scannedBooks.length} buku!` : `Berhasil mengembalikan ${scannedBooks.length} buku!`;
     if (totalFine > 0) successMessage += ` Denda: Rp ${totalFine.toLocaleString('id-ID')}`;
     setMessage(successMessage);
+    if (type === 'KEMBALI') {
+      setActiveLoans(prev => prev.filter(t => !successIds.includes(Number(t.book_id))));
+    }
   };
 
   const processRfid = async (input: string) => {
     if (status === 'loading') return;
     setStatus('loading');
     try {
-      const res = await fetch(`/api/members/${input}`);
+      const res = await fetch(`/api/members/${input}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         setMember(data);
@@ -500,24 +564,19 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [scannedInput, step, member, type, status, onBack]);
 
-  // Polling for RFID scans
+  // Event listener for RFID scans in Kios Peminjaman
   useEffect(() => {
-    const interval = setInterval(() => {
+    const handleRfid = (e: CustomEvent) => {
       if (step !== 1 || status !== 'idle') return;
-      fetch('/api/rfid/consume', { method: 'POST' })
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.uid) {
-            if (step === 1 && status === 'idle') {
-              processRfid(data.uid);
-            }
-          }
-        })
-        .catch(() => {});
-    }, 1000);
-    
-    return () => clearInterval(interval);
-  }, [step, status]);
+      const data = e.detail;
+      if (data && data.uid) {
+        processRfid(data.uid);
+      }
+    };
+
+    window.addEventListener('rfid_scanned', handleRfid as EventListener);
+    return () => window.removeEventListener('rfid_scanned', handleRfid as EventListener);
+  }, [step, status, processRfid]);
 
   // JSQR Scanner integration
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -712,7 +771,9 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
                       defaultValue=""
                     >
                       <option value="" disabled>--- Pilih manual ---</option>
-                      {(type === 'PINJAM' ? katalogBooks : katalogBooks.filter(kb => activeLoans.some(t => t.book_id === kb.id))).map((kb: any) => (
+                      {(type === 'PINJAM' ? katalogBooks : katalogBooks.filter(kb => activeLoans.some(t => Number(t.book_id) === Number(kb.id))))
+                        .filter(kb => !scannedBooks.some(sb => Number(sb.id) === Number(kb.id)))
+                        .map((kb: any) => (
                         <option key={kb.id} value={kb.qr_code} disabled={type === 'PINJAM' && kb.available_copies <= 0}>
                           {kb.title} {type === 'PINJAM' && kb.available_copies <= 0 ? '(Habis)' : ''}
                         </option>
@@ -779,7 +840,7 @@ function KatalogView({ onBack }: { onBack: () => void }) {
     const delayDebounce = setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/books?search=${encodeURIComponent(search)}`);
+        const res = await fetch(`/api/books?search=${encodeURIComponent(search)}`, { cache: "no-store" });
         const data = await res.json();
         setBooks(Array.isArray(data) ? data : []);
       } catch (err) {
@@ -895,6 +956,38 @@ function LoginView({ onLogin, onKatalog }: { onLogin: (data: any) => void, onKat
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Event listener for RFID scan on Login screen
+  useEffect(() => {
+    const handleRfid = (e: CustomEvent) => {
+      const data = e.detail;
+      if (data && data.uid) {
+        const uid = String(data.uid).trim();
+        setUsername(uid);
+        setLoading(true);
+        setError("");
+        fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: uid, password: '' })
+        })
+        .then(res => res.json())
+        .then(resData => {
+          if (resData.success) {
+            if (resData.token) localStorage.setItem('token', resData.token);
+            onLogin(resData);
+          } else {
+            setError(resData.error || `Kartu RFID (${uid}) tidak terdaftar!`);
+          }
+        })
+        .catch(() => setError("Gagal login dengan RFID."))
+        .finally(() => setLoading(false));
+      }
+    };
+
+    window.addEventListener('rfid_scanned', handleRfid as EventListener);
+    return () => window.removeEventListener('rfid_scanned', handleRfid as EventListener);
+  }, [onLogin]);
+
   const handleLogin = async () => {
     setLoading(true);
     setError("");
@@ -997,7 +1090,22 @@ function StaffDashboard({ onLogout, remoteUrl }: { onLogout: () => void, remoteU
   const [stats, setStats] = useState({ totalBooks: 0, borrowedBooks: 0, activeMembers: 0, totalFines: 0 });
 
   useEffect(() => {
-    fetch('/api/stats').then(res => res.json()).then(data => setStats(data && typeof data === 'object' ? data : stats)).catch(() => {});
+    const fetchStats = () => fetch('/api/stats', { cache: 'no-store' }).then(res => res.json()).then(data => setStats(data && typeof data === 'object' ? data : stats)).catch(() => {});
+    fetchStats();
+    let localTxVersion = 0;
+    const interval = setInterval(() => {
+      if (activeTab !== 'OVERVIEW') return;
+      fetch('/api/transactions/version')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.version !== localTxVersion) {
+            localTxVersion = data.version;
+            fetchStats();
+          }
+        })
+        .catch(() => {});
+    }, 2000);
+    return () => clearInterval(interval);
   }, [activeTab]);
 
   const menuItems = [
@@ -1113,7 +1221,7 @@ function BookManagementView() {
 
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 
-  const loadBooks = () => fetch('/api/books', { cache: 'no-cache' }).then(res => res.json()).then(data => Array.isArray(data) ? setBooks(data) : setBooks([])).catch(() => setBooks([]));
+  const loadBooks = () => fetch(`/api/books?_t=${Date.now()}`, { cache: 'no-cache' }).then(res => res.json()).then(data => Array.isArray(data) ? setBooks(data) : setBooks([])).catch(() => setBooks([]));
   useEffect(() => { loadBooks(); }, []);
 
   const filteredBooks = books.filter(b => 
@@ -1331,7 +1439,7 @@ function BookManagementView() {
             </div>
             <div>
               <label className="text-[10px] font-bold text-gray-400 uppercase">ISBN</label>
-              <input required type="text" placeholder="ISBN" value={formData.isbn} onChange={e => setFormData({...formData, isbn: e.target.value.replace(/\D/g, '')})} className="w-full px-4 py-2 rounded-xl border outline-none focus:ring-1 focus:ring-indigo-400 mt-1" />
+              <input required type="text" placeholder="ISBN" value={formData.isbn} onChange={e => setFormData({...formData, isbn: e.target.value})} className="w-full px-4 py-2 rounded-xl border outline-none focus:ring-1 focus:ring-indigo-400 mt-1" />
             </div>
             <div>
               <label className="text-[10px] font-bold text-gray-400 uppercase">Kategori</label>
@@ -1339,7 +1447,7 @@ function BookManagementView() {
             </div>
             <div>
               <label className="text-[10px] font-bold text-gray-400 uppercase">Jumlah</label>
-              <input required type="number" placeholder="Stok" value={formData.total_copies} onChange={e => setFormData({...formData, total_copies: parseInt(e.target.value)})} className="w-full px-4 py-2 rounded-xl border outline-none focus:ring-1 focus:ring-indigo-400 mt-1" />
+              <input required type="number" placeholder="Stok" value={formData.total_copies} onChange={e => setFormData({...formData, total_copies: parseInt(e.target.value) || 0})} className="w-full px-4 py-2 rounded-xl border outline-none focus:ring-1 focus:ring-indigo-400 mt-1" />
             </div>
             {errorMsg && <div className="md:col-span-2 text-red-500 font-bold text-sm bg-red-50 p-2 rounded-lg">{errorMsg}</div>}
             <button type="submit" className="md:col-span-2 py-3 bg-[#6366f1] text-white font-bold rounded-xl mt-2">Simpan</button>
@@ -1494,30 +1602,28 @@ function MemberManagementView() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [regStep, scannedInput, members]);
 
-  // Polling for RFID scans during registration
+  // Event listener for RFID scans during registration or editing
   useEffect(() => {
-    if (regStep !== 'SCANNING') return;
-    
-    const interval = setInterval(() => {
-      fetch('/api/rfid/consume', { method: 'POST' })
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.uid) {
-            const uid = data.uid.trim();
-            const isRegistered = members.some(m => m.rfid_uid === uid);
-            if (isRegistered) {
-               setErrorMsg("ID RFID sudah terdaftar pada anggota lain!");
-               setTimeout(() => setErrorMsg(""), 3000);
-            } else {
-               setFormData(prev => ({ ...prev, rfid_uid: uid }));
-               setRegStep('FORM');
-            }
-          }
-        })
-        .catch(() => {});
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [regStep, members]);
+    if (regStep === 'IDLE') return;
+
+    const handleRfid = (e: CustomEvent) => {
+      const data = e.detail;
+      if (data && data.uid) {
+        const uid = String(data.uid).trim();
+        const existingMember = members.find(m => m.rfid_uid === uid);
+        if (existingMember && String(existingMember.id) !== String(formData.id)) {
+           setErrorMsg(`ID RFID (${uid}) sudah terdaftar pada: ${existingMember.name}`);
+           setTimeout(() => setErrorMsg(""), 4000);
+        } else {
+           setFormData(prev => ({ ...prev, rfid_uid: uid }));
+           if (regStep === 'SCANNING') setRegStep('FORM');
+        }
+      }
+    };
+
+    window.addEventListener('rfid_scanned', handleRfid as EventListener);
+    return () => window.removeEventListener('rfid_scanned', handleRfid as EventListener);
+  }, [regStep, members, formData.id]);
 
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -1768,7 +1874,7 @@ function FinesView() {
   const [editAmount, setEditAmount] = useState(0);
 
   const fetchData = () => {
-    fetch('/api/transactions').then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
+    fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' }).then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
   }
 
   const [txVersion, setTxVersion] = useState(0);
@@ -1808,25 +1914,42 @@ function FinesView() {
     }
   };
 
-const filtered = data.filter(t => t.fine_amount > 0 && (
-    t.member_name.toLowerCase().includes(search.toLowerCase()) || 
-    t.book_title.toLowerCase().includes(search.toLowerCase())
-  ));
+const filtered = data.filter(t => {
+    if (t.fine_amount <= 0) return false;
+    const matchSearch = t.member_name.toLowerCase().includes(search.toLowerCase()) || 
+       t.book_title.toLowerCase().includes(search.toLowerCase());
+    
+    if (filterMonth) {
+      const txMonth = new Date(t.transaction_date).toISOString().slice(0, 7);
+      return matchSearch && txMonth === filterMonth;
+    }
+    return matchSearch;
+  });
   const { items: sortedFines, requestSort: requestSortTxs, sortConfig: sortConfigTxs } = useSortableData(filtered);
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h3 className="text-xl font-bold text-gray-800">Manajemen Denda</h3>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-          <input 
-            type="text" 
-            placeholder="Cari denda..." 
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="pl-9 pr-4 py-2 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-indigo-400 outline-none w-64"
-          />
+        <div className="flex flex-col sm:flex-row items-center gap-3">
+          <div className="relative">
+            <input
+              type="month"
+              value={filterMonth}
+              onChange={e => setFilterMonth(e.target.value)}
+              className="px-4 py-2 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-indigo-400 outline-none w-40 text-gray-600"
+            />
+          </div>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input 
+              type="text" 
+              placeholder="Cari denda..." 
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="pl-9 pr-4 py-2 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-indigo-400 outline-none w-64"
+            />
+          </div>
         </div>
       </div>
 
@@ -1900,7 +2023,7 @@ function ReportView() {
   const [filterMonth, setFilterMonth] = useState("");
 
   const fetchData = () => {
-    fetch('/api/transactions').then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
+    fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' }).then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
   }
 
   const [txVersion, setTxVersion] = useState(0);
@@ -1962,15 +2085,15 @@ const filtered = data.filter(t => {
     if (sortedTransactions.length === 0) {
       return; // handle silently or use toast in real app
     }
-    const headers = ["Waktu", "Peminjam", "Buku", "Tipe", "Status", "Denda", "Status Denda"];
+    const headers = ["Waktu Pinjam", "Waktu Kembali", "Peminjam", "Buku", "Status", "Denda", "Status Denda"];
     const csvContent = [
       headers.join(","),
       ...sortedTransactions.map((t: any) => 
         [
           `"${new Date(t.transaction_date).toLocaleString('id-ID')}"`, 
+          `"${t.return_date ? new Date(t.return_date).toLocaleString('id-ID') : '-'}"`, 
           `"${t.member_name}"`, 
           `"${t.book_title}"`, 
-          `"${t.type}"`, 
           `"${t.status}"`, 
           `"${t.fine_amount || 0}"`, 
           `"${t.fine_status || '-'}"`
@@ -2044,11 +2167,11 @@ const filtered = data.filter(t => {
                 <td className="px-6 py-4">
                   <span className={cn(
                     "px-2 py-0.5 rounded-full text-[10px] font-black uppercase",
-                    t.type === 'PINJAM' ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600"
-                  )}>{t.type}</span>
+                    t.status === 'SELESAI' ? "bg-emerald-50 text-emerald-600" : (t.status === 'TERLAMBAT' ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-600")
+                  )}>{t.status}</span>
                 </td>
                 <td className="px-6 py-4 text-right">
-                   {t.type === 'PINJAM' && (t.status === 'BERJALAN' || t.status === 'TERLAMBAT') && (
+                   {(t.status === 'BERJALAN' || t.status === 'TERLAMBAT') && (
                      <button onClick={() => handleAdminKembali(t)} className="text-xs font-bold px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors">Kembalikan</button>
                    )}
                 </td>
@@ -2066,7 +2189,21 @@ function RecentActivity() {
   const [logs, setLogs] = useState([]);
 
   const fetchLogs = () => {
-    fetch('/api/transactions').then(res => res.json()).then(data => Array.isArray(data) ? setLogs(data.slice(0, 5)) : setLogs([])).catch(() => setLogs([]));
+    fetch(`/api/transactions?_t=${Date.now()}`, { cache: 'no-store' })
+      .then(res => res.json())
+      .then(data => {
+        if (!Array.isArray(data)) return setLogs([]);
+        let events: any[] = [];
+        data.forEach((t: any) => {
+          events.push({ ...t, event_date: new Date(t.transaction_date).getTime(), event_type: 'PINJAM', event_id: t.id + '-p' });
+          if (t.status === 'SELESAI' && t.return_date) {
+            events.push({ ...t, event_date: new Date(t.return_date).getTime(), event_type: 'KEMBALI', event_id: t.id + '-k' });
+          }
+        });
+        events.sort((a, b) => b.event_date - a.event_date);
+        setLogs(events.slice(0, 5) as any);
+      })
+      .catch(() => setLogs([]));
   };
 
   const [txVersion, setTxVersion] = useState(0);
@@ -2092,18 +2229,18 @@ function RecentActivity() {
       <h3 className="text-xl font-black text-gray-800 mb-6 tracking-tight">Aktivitas Terakhir</h3>
       <div className="flex-1 space-y-5">
         {logs.map((l: any) => (
-          <div key={l.id} className="flex items-center gap-4 py-2">
+          <div key={l.event_id} className="flex items-center gap-4 py-2">
             <div className={cn(
               "w-2 h-2 rounded-full",
-              l.type === 'PINJAM' ? "bg-amber-400" : "bg-emerald-400"
+              l.event_type === 'PINJAM' ? "bg-amber-400" : "bg-emerald-400"
             )} />
             <div className="flex-1">
               <p className="text-sm text-gray-600 leading-tight">
                 <span className="font-bold text-gray-800">{l.member_name}</span> 
-                {l.type === 'PINJAM' ? ' meminjam ' : ' mengembalikan '} 
+                {l.event_type === 'PINJAM' ? ' meminjam ' : ' mengembalikan '} 
                 <span className="text-indigo-600 font-medium">{l.book_title}</span>
               </p>
-              <p className="text-xs text-gray-500 font-bold mt-1">{new Date(l.return_date || l.transaction_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+              <p className="text-xs text-gray-500 font-bold mt-1">{new Date(l.event_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
             </div>
           </div>
         ))}
@@ -2116,10 +2253,31 @@ function RecentActivity() {
 
 function VisitorStats() {
   const [data, setData] = useState([]);
+  
+  const fetchStats = () => {
+    fetch('/api/stats/visitors', { cache: 'no-store' })
+      .then(res => res.json())
+      .then(data => Array.isArray(data) ? setData(data as never[]) : setData([]))
+      .catch(() => setData([]));
+  };
+
+  const [txVersion, setTxVersion] = useState(0);
 
   useEffect(() => {
-    fetch('/api/stats/visitors').then(res => res.json()).then(data => Array.isArray(data) ? setData(data) : setData([])).catch(() => setData([]));
-  }, []);
+    fetchStats();
+    const interval = setInterval(() => {
+      fetch('/api/transactions/version')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.version !== txVersion) {
+            setTxVersion(data.version);
+            fetchStats();
+          }
+        })
+        .catch(() => {});
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [txVersion]);
 
   return (
     <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 flex flex-col h-full">
@@ -2308,3 +2466,5 @@ function UserProfileView({ user, onBack }: { user: any, onBack: () => void }) {
     </div>
   );
 }
+
+
