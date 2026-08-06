@@ -728,13 +728,23 @@ function ActionView({ title, onBack, type, user }: { title: string, onBack: () =
             ) : (
               <div className="w-full mt-4 flex flex-col gap-2">
                 <button onClick={() => { 
-                  if (user) { onBack(); } 
-                  else { setStatus('idle'); setMessage(''); setScannedBooks([]); scannedCodesRef.current.clear(); setActiveLoans([]); setActiveLoansFetched(false); setMember(null); setStep(1); } 
+                  setStatus('idle'); 
+                  setMessage(''); 
+                  setScannedBooks([]); 
+                  scannedCodesRef.current.clear(); 
+                  setActiveLoans([]); 
+                  setActiveLoansFetched(false); 
+                  if (user) {
+                     setStep(2); // Scan book again
+                  } else {
+                     setMember(null); 
+                     setStep(1); // Scan member again
+                  }
                 }} className="w-full py-3 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors">
-                  Kembali ke Awal
+                  {user ? "Scan Buku Lagi" : "Scan Pengguna Lain"}
                 </button>
                 <button onClick={() => { onBack(); setMessage(''); setScannedBooks([]); scannedCodesRef.current.clear(); setActiveLoans([]); setActiveLoansFetched(false); setMember(null); }} className="w-full py-3 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 transition-colors shadow-lg shadow-green-200">
-                    Selesai
+                    Selesai & Kembali ke Menu
                 </button>
               </div>
             )}
